@@ -63,8 +63,8 @@ fun DashboardScreen(
                     .background(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.15dp.value),
-                                MaterialTheme.colorScheme.secondary.copy(alpha = 0.05dp.value)
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                MaterialTheme.colorScheme.secondary.copy(alpha = 0.05f)
                             )
                         )
                     )
