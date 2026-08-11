@@ -1,0 +1,109 @@
+================================================================================
+          POWER USER HUB - BACKEND EXECUTOR AUDIT & SECURITY REPORT
+================================================================================
+Date: August 11, 2026
+Audit Target: Power User Hub Android App (Service & Worker Components)
+Audited Files:
+  1. CommandExecutor.kt
+  2. CommandResult.kt
+  3. ShizukuExecutor.kt
+  4. RootExecutor.kt
+  5. AdbExecutor.kt
+  6. LockDatabaseHelper.kt
+  7. ShellService.kt
+  8. LockEnforcementWorker.kt
+
+--------------------------------------------------------------------------------
+1. EXECUTIVE SUMMARY
+--------------------------------------------------------------------------------
+The backend command execution and setting enforcement architecture of Power User Hub has been audited. Several critical issues were identified:
+- Critical Security Vulnerability (Command Injection): RootExecutor executes commands through a root shell input stream without escaping. A malicious payload or an invalid setting value could trigger arbitrary command execution with root privileges.
+- Resource Leaks (Cursors and Processes): LockDatabaseHelper leaks SQLite Cursors and database connections when exceptions occur. ShizukuExecutor and RootExecutor leak process stream readers and fail to destroy stalled processes.
+- Threading Bottlenecks: LockEnforcementWorker runs blocking database operations and sequential process spawns on Dispatchers.Default (or the default WorkManager thread), which blocks the coroutine pool. Furthermore, ShellService performs expensive synchronous process execution checking on every setting query/update.
+- Flawed Argument Parsing: The command parser in ShizukuExecutor splits arguments solely by spaces, fails on escaped quotes or single quotes, and can cause execution errors when executing multi-word commands.
+
+--------------------------------------------------------------------------------
+2. VERIFICATION CATEGORIES AUDIT
+--------------------------------------------------------------------------------
+
+[CATEGORY A: RESOURCE LEAKS]
+- LockDatabaseHelper.kt:
+  - getAllLocks() opens a Cursor and SQLiteDatabase instance. If an exception occurs (e.g., column index mapping error), the cursor and connection are never closed.
+  - Write methods (insertOrUpdateLock, updateLockStatus, deleteLock) open writableDatabase and close it manually at the end. If an exception is thrown before db.close(), the connection is leaked.
+  - Manual database closing (db.close()) inside helpers is an anti-pattern that can crash concurrent database queries on other threads.
+- ShizukuExecutor.kt & RootExecutor.kt:
+  - Process stdout/stderr readers (BufferedReader) and process streams (process.inputStream, process.errorStream, process.outputStream) are not wrapped in try-finally or .use. They remain open if the command execution throws an exception, leading to file descriptor leaks.
+  - Stalled processes are never cleaned up because there is no call to process.destroy() in a finally block.
+
+[CATEGORY B: THREADING & STREAM CONSUMPTION]
+- Process Streams:
+  - Both ShizukuExecutor and RootExecutor spawn dedicated background threads to consume stdout and stderr streams, which correctly prevents buffer exhaustion deadlocks.
+  - However, the calling thread blocks indefinitely waiting for process.waitFor() and thread.join().
+  - There is no timeout handling. If a command (e.g. su authorization or a command prompt) blocks indefinitely, the thread is leaked and blocked forever.
+- Coroutine Dispatcher:
+  - LockEnforcementWorker (a CoroutineWorker) executes blocking DB queries and sequential process invocations on the default coroutine dispatcher (Dispatchers.Default), which violates coroutine guidelines (blocking I/O should be run on Dispatchers.IO).
+- IPC & Process Spawning Overhead:
+  - ShellService calls getActiveExecutor() on every setting read/write. If Shizuku is not active, this repeatedly runs Runtime.getRuntime().exec(arrayOf("which", "su")) on the worker thread. This creates massive overhead (~20-50ms per check), leading to battery drain.
+
+[CATEGORY C: ARGUMENT SAFETY & COMMAND SPLITTING]
+- ShizukuExecutor parseCommand():
+  - Splits args by checking c == ' '. It ignores other whitespaces (like \t, \n).
+  - Does not handle single quotes '.
+  - Does not handle escaped double quotes \".
+  - A command like adb shell "settings put global my_key 1" parses to a single command arg ["settings put global my_key 1"]. Passing this to Shizuku.newProcess will result in a FileNotFoundException or execution error because there is no executable file with that exact multi-word name.
+- Shell Command Injection in RootExecutor:
+  - RootExecutor writes commands to the standard input of a shell (su).
+  - ShellService.writeSetting generates: settings put $ns $key "$value".
+  - If value contains $(reboot) or "; reboot; ", the root shell will parse and execute the injected reboot command.
+
+--------------------------------------------------------------------------------
+3. DETAILED FILE-BY-FILE FINDINGS & RECOMMENDATIONS
+--------------------------------------------------------------------------------
+
+### File 1: com/poweruserhub/app/service/CommandExecutor.kt
+- Severity: Low
+- Issue: The interface design accepts a single string (execute(command: String)), which forces callers to construct concatenated commands.
+- Fix: Add a list-based overload to support direct safe process execution without shells:
+  fun execute(args: List<String>): CommandResult
+
+### File 2: com/poweruserhub/app/service/CommandResult.kt
+- Severity: None
+- Issue: Clean data class, no issues found.
+
+### File 3: com/poweruserhub/app/service/ShizukuExecutor.kt
+- Severity: High
+- Issues:
+  - Stream readers and process streams leak on exception.
+  - Blocking waitFor() can cause infinite hangs.
+  - Flawed parseCommand() parsing.
+
+### File 4: com/poweruserhub/app/service/RootExecutor.kt
+- Severity: Critical
+- Issues:
+  - Shell command injection (vulnerable to root compromise).
+  - writeBytes corrupts UTF-8 strings.
+  - Stream/reader resource leak.
+  - Dynamic which su check leaks processes and is slow.
+
+### File 5: com/poweruserhub/app/service/AdbExecutor.kt
+- Severity: None
+- Issue: Stub implementation, clean.
+
+### File 6: com/poweruserhub/app/service/LockDatabaseHelper.kt
+- Severity: High
+- Issues:
+  - Cursor leak when exceptions occur in getAllLocks().
+  - Manual database closing (db.close()) closes the connection pool, breaking concurrency.
+  - Inefficient index lookups inside the query loop.
+
+### File 7: com/poweruserhub/app/service/ShellService.kt
+- Severity: Medium
+- Issues:
+  - Lack of executor availability caching (spawns which su repeatedly).
+  - Unescaped settings value concatenation in writeSetting.
+
+### File 8: com/poweruserhub/app/worker/LockEnforcementWorker.kt
+- Severity: Medium
+- Issues:
+  - Blocking calls run on the default dispatcher (Dispatchers.Default), risking thread starvation.
+  - In-memory filtering instead of selective SQL querying.

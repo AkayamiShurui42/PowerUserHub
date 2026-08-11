@@ -1,0 +1,12 @@
+{
+  "plan": ".asw/plans/power_user_hub.md",
+  "activeTask": "Task 2",
+  "completed": [
+    "Task 1"
+  ],
+  "artifacts": [
+    "PowerUserHub/.asw/evidence/gradle_audit.txt"
+  ],
+  "cleanup": [],
+  "blockers": []
+}

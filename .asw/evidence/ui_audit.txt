@@ -1,0 +1,265 @@
+================================================================================
+POWER USER HUB - JETPACK COMPOSE UI/UX & PERFORMANCE AUDIT REPORT
+================================================================================
+Date: 2026-08-11
+Auditor: Senior Frontend Architect
+Status: Action Required (Critical performance & M3 conformance issues identified)
+================================================================================
+
+1. EXECUTIVE SUMMARY
+--------------------------------------------------------------------------------
+This report presents a comprehensive review of the Jetpack Compose frontend files 
+for the 'Power User Hub' Android application. The codebase establishes a strong 
+custom dark slate brand identity, but contains several violations of Material 3 
+design specifications and critical Jetpack Compose performance anti-patterns:
+- Scroll Jank & Unnecessary Recompositions: Heavy filtering operations are 
+  computed directly in the composition body. LazyColumns do not define unique 
+  keys for their items.
+- Material 3 Conformance: Interactivity on cards is implemented using generic 
+  modifiers rather than native M3 APIs. SuggestionChips are misused as static 
+  labels, and custom button shapes diverge from M3 standard definitions.
+- Dynamic Color Incompatibilities: System wallpaper color extraction completely 
+  overrides custom dark slate branding on modern API levels (Android 12+) by 
+  default in the theme constructor.
+- Thread Safety Concerns: Disk/Database operations are scheduled on CPU-intensive 
+  default dispatchers.
+
+The following sections detail each file's issues, their performance/UI impact, 
+and code-level refactoring recommendations.
+
+
+2. FILE-BY-FILE AUDIT & ANALYSIS
+--------------------------------------------------------------------------------
+
+2.1 Color.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/theme/Color.kt
+- Findings:
+  * Defines clean slate-inspired values (DeepSlateBackground, DarkGlassSurface, etc.).
+  * Does not specify color roles for error states or corresponding container colors.
+  * Lacks light mode custom tokens, defaulting to system light colors which dilutes the branding.
+
+2.2 Theme.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/theme/Theme.kt
+- Findings:
+  * Overrides Custom Aesthetics: The dynamicColor parameter in PowerUserHubTheme defaults to true:
+    `fun PowerUserHubTheme(..., dynamicColor: Boolean = true, ...)`
+    This completely replaces the custom dark slate palette on API 31+ with system-generated colors.
+  * Incomplete Light Scheme: LightColorScheme is missing crucial M3 color roles (surfaceVariant, onSurfaceVariant, outline, error, errorContainer), which can cause visual bugs if standard M3 components try to read them.
+  * Hardcoded Colors: LightColorScheme hardcodes Color(0xFFFEF7FF) and Color.White instead of reading from Color.kt.
+
+2.3 Type.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/theme/Type.kt
+- Findings:
+  * Incomplete M3 Typography: Only 5 out of 15 standard M3 typography styles are defined.
+  * Styles like displayLarge/Medium/Small, headlineLarge/Medium/Small, titleSmall, bodySmall, and labelLarge/Medium are fallback system defaults. This leads to typographic inconsistencies.
+
+2.4 Screen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/Screen.kt
+- Findings:
+  * Simple sealed class based on hardcoded route strings.
+  * Modern Recommendation: Upgrade to type-safe Navigation (Compose Navigation 2.8.0+) using @Serializable objects instead of raw strings.
+
+2.5 DashboardScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/DashboardScreen.kt
+- Findings:
+  * Incorrect Alpha Calculations: Uses `alpha = 0.15dp.value` (line 66) to obtain a float value `0.15f`. This forces unnecessary unit conversion and harms code clarity.
+  * Box Overrides Card Colors: The gradient box inside the Welcome Card overrides the card's background container color, rendering elevation and background shapes invisible.
+  * Scroll State: Correctly uses Column with verticalScroll since the dashboard is static and of limited height.
+
+2.6 SettingsExplorerScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/SettingsExplorerScreen.kt
+- Findings:
+  * CRITICAL PERFORMANCE ISSUE (Heavy Filtering):
+    `val filteredSettings = settingsList.filter { ... }` (line 58)
+    The list is filtered on every single recomposition (e.g., when typing, showing sheet, or scrolling). Since there are thousands of settings in secure/system tables, this causes severe UI lag.
+  * CRITICAL PERFORMANCE ISSUE (No Lazy Keys):
+    `items(filteredSettings) { item -> ... }` (line 119)
+    The items loop lacks keys. When searching, Compose cannot identify item movement, reordering, or caching, forcing full list rebuilds.
+  * M3 Conformance (Interactive Card):
+    `Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick))` (line 173)
+    Bypasses M3 interactive state layers, leading to broken elevation animations, disabled ripples, and poor accessibility.
+  * M3 Conformance (Static Badge):
+    `SuggestionChip(onClick = {}, label = { ... }, enabled = false)` (line 201)
+    Misuses an interactive component for a static label. Disabling it makes it look greyed out and broken.
+
+2.7 AppExplorerScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/AppExplorerScreen.kt
+- Findings:
+  * CRITICAL PERFORMANCE ISSUE (Heavy Filtering):
+    `val filteredApps = appList.filter { ... }` (line 76)
+    Runs package list filtering on every recomposition. With hundreds of packages, this causes frame drops.
+  * CRITICAL PERFORMANCE ISSUE (No Lazy Keys):
+    `items(filteredApps) { app -> ... }` (line 138)
+    Lacks unique keys in the items call.
+  * M3 Conformance (Interactive Card):
+    `Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick))` (line 212)
+    Bypasses Card's clickable API.
+  * M3 Conformance (Static Badge):
+    `SuggestionChip(..., enabled = false)` (line 232)
+    Incorrect component for static user/system tags.
+  * Nested Component Freeze:
+    `ComponentExpandableRow` (line 387) iterates through activities/services/permissions using `.forEach` inside a non-lazy column. If an app declares hundreds of components, expanding the row will block the UI thread.
+
+2.8 LockedSettingsScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/LockedSettingsScreen.kt
+- Findings:
+  * CRITICAL PERFORMANCE ISSUE (No Lazy Keys):
+    `items(locksList) { lock -> ... }` (line 150)
+    Lacks unique keys, causing scrolling lag when rules are modified or refreshed.
+  * Threading Vulnerability:
+    `coroutineScope.launch(Dispatchers.Default) { dbHelper.updateLockStatus(...) }` (line 49)
+    Database write operations are executed on CPU-heavy Default dispatcher. It should run on Dispatchers.IO to prevent resource contention.
+  * M3 Conformance: Button (line 97) uses custom shape `RoundedCornerShape(8.dp)` instead of default stadium shape.
+
+2.9 ServiceMonitorScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/ServiceMonitorScreen.kt
+- Findings:
+  * CRITICAL PERFORMANCE ISSUE (No Lazy Keys):
+    `items(runningAppsList) { app -> ... }` (line 165)
+    Lacks unique keys.
+  * M3 Conformance (Static Badge):
+    `SuggestionChip(..., enabled = false)` (line 220)
+    Incorrect use of SuggestionChip for static tagging.
+
+2.10 AdvancedDeveloperModeScreen.kt
+- Location: app/src/main/java/com/poweruserhub/app/ui/screens/AdvancedDeveloperModeScreen.kt
+- Findings:
+  * Unbounded Log State:
+    `consoleLogs` is a SnapshotStateList that grows indefinitely. Extensive terminal use will lead to heavy memory load and lag.
+  * M3 Conformance:
+    * FAB (line 181) overrides container and content colors to primary/white (M2 style) instead of using primaryContainer/onPrimaryContainer.
+    * Buttons and text fields use inconsistent corner shapes (8.dp and 12.dp) rather than standardized M3 tokens.
+  * Hardcoded Theme Colors:
+    * Console window background is hardcoded to Color(0xFF0F0B1E), ignoring potential theme shifts.
+
+
+3. ACTIONABLE REFACTORING RECOMMENDATIONS & SOLUTIONS
+--------------------------------------------------------------------------------
+
+3.1 Fix Heavy Composition Filters & Lazy Layout Keys
+Ensure list filters are remembered and stable keys are passed to LazyColumns:
+
+```kotlin
+// In SettingsExplorerScreen.kt:
+val filteredSettings = remember(settingsList, searchQuery) {
+    settingsList.filter {
+        it.key.contains(searchQuery, ignoreCase = true) || 
+                it.value.contains(searchQuery, ignoreCase = true)
+    }
+}
+
+LazyColumn(...) {
+    items(filteredSettings, key = { "${it.namespace}_${it.key}" }) { item ->
+        SettingCard(item = item, onClick = { ... })
+    }
+}
+```
+
+```kotlin
+// In AppExplorerScreen.kt:
+val filteredApps = remember(appList, filterMode, searchQuery) {
+    appList.filter { app ->
+        val matchesFilter = when (filterMode) {
+            "USER" -> !app.isSystem
+            "SYSTEM" -> app.isSystem
+            "ENABLED" -> app.isEnabled
+            "DISABLED" -> !app.isEnabled
+            else -> true
+        }
+        val matchesSearch = app.appName.contains(searchQuery, ignoreCase = true) || 
+                app.packageName.contains(searchQuery, ignoreCase = true)
+        matchesFilter && matchesSearch
+    }
+}
+
+LazyColumn(...) {
+    items(filteredApps, key = { it.packageName }) { app ->
+        AppRowCard(app = app, onClick = { ... })
+    }
+}
+```
+
+3.2 Conformance to M3 Interactive Card Specifications
+Replace custom Modifier.clickable with the native Card's onClick API:
+
+```kotlin
+// Before:
+Card(
+    modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    shape = RoundedCornerShape(12.dp)
+) { ... }
+
+// After:
+Card(
+    onClick = onClick,
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(12.dp)
+) { ... }
+```
+
+3.3 Replace Misused Chips with Badges
+For static indicators (such as Namespace or Package tags), use styled Box containers instead of disabled SuggestionChips:
+
+```kotlin
+@Composable
+fun ThemedBadge(text: String) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(4.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+}
+```
+
+3.4 Correct Alpha calculations in DashboardScreen.kt
+Use the float literal directly:
+
+```kotlin
+// Before:
+MaterialTheme.colorScheme.primary.copy(alpha = 0.15dp.value)
+
+// After:
+MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+```
+
+3.5 Threading Safety for DB Access
+Run data mutations and query updates on the IO Dispatcher:
+
+```kotlin
+// In LockedSettingsScreen.kt:
+fun verifyAndRestoreLocks() {
+    isChecking = true
+    coroutineScope.launch(Dispatchers.IO) {
+        // SQLite operations...
+        withContext(Dispatchers.Main) {
+            refreshLocks()
+            isChecking = false
+        }
+    }
+}
+```
+
+3.6 Prevent Memory Leak in Advanced Terminal Console
+Enforce a maximum buffer limit on console logs:
+
+```kotlin
+// In AdvancedDeveloperModeScreen.kt:
+if (commandInput.trim().isNotEmpty()) {
+    val cmd = commandInput.trim()
+    consoleLogs.add("$ $cmd")
+    if (consoleLogs.size > 200) {
+        consoleLogs.removeRange(0, consoleLogs.size - 200)
+    }
+    ...
+}
+```
+================================================================================
