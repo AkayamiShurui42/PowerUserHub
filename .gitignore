@@ -1,0 +1,22 @@
+# Built artifacts
+**/build/
+*.apk
+*.aar
+
+# Gradle files
+.gradle/
+build/
+
+# IDEs
+.idea/
+*.iml
+*.ipr
+*.iws
+.navigation/
+
+# Local files
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
