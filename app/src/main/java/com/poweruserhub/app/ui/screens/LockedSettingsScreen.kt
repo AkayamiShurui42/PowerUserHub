@@ -46,7 +46,7 @@ fun LockedSettingsScreen(
 
     fun verifyAndRestoreLocks() {
         isChecking = true
-        coroutineScope.launch(Dispatchers.Default) {
+        coroutineScope.launch(Dispatchers.IO) {
             val sdf = SimpleDateFormat("MMM dd, hh:mm:ss a", Locale.getDefault())
             val activeLocks = dbHelper.getAllLocks().filter { it.isEnabled }
             
@@ -147,7 +147,7 @@ fun LockedSettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(locksList) { lock ->
+                items(locksList, key = { "${it.namespace}_${it.key}" }) { lock ->
                     LockRowCard(
                         lock = lock,
                         onDelete = {

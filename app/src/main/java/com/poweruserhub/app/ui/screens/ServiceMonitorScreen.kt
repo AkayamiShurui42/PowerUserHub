@@ -162,7 +162,7 @@ fun ServiceMonitorScreen(shellService: ShellService) {
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(runningAppsList) { app ->
+                items(runningAppsList, key = { it.packageName }) { app ->
                     RunningAppCard(app = app)
                 }
                 
@@ -217,11 +217,27 @@ fun RunningAppCard(app: AppItem) {
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            SuggestionChip(
-                onClick = {},
-                label = { Text(if (app.isSystem) "System" else "User", fontSize = 10.sp) },
-                enabled = false
-            )
+            ThemedBadge(text = if (app.isSystem) "System" else "User")
         }
+    }
+}
+
+@Composable
+fun ThemedBadge(text: String) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontSize = 10.sp
+        )
     }
 }

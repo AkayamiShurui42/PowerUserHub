@@ -9,18 +9,21 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
 class LockEnforcementWorker(
     context: Context,
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val dbHelper = LockDatabaseHelper(applicationContext)
         val shellService = ShellService(applicationContext)
         val activeLocks = dbHelper.getAllLocks().filter { it.isEnabled }
         
         if (activeLocks.isEmpty()) {
-            return Result.success()
+            return@withContext Result.success()
         }
 
         val sdf = SimpleDateFormat("MMM dd, yyyy hh:mm:ss a", Locale.getDefault())
@@ -50,6 +53,6 @@ class LockEnforcementWorker(
             }
         }
 
-        return Result.success()
+        return@withContext Result.success()
     }
 }

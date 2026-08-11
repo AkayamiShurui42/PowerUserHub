@@ -9,17 +9,22 @@ import java.util.Locale
 
 class ShellService(private val context: Context) {
 
-    private val shizukuExecutor = ShizukuExecutor()
-    private val rootExecutor = RootExecutor()
-    private val adbExecutor = AdbExecutor(context)
+    private var cachedExecutor: CommandExecutor? = null
+    private var lastChecked: Long = 0
 
+    @Synchronized
     fun getActiveExecutor(): CommandExecutor? {
-        return when {
-            shizukuExecutor.isAvailable() -> shizukuExecutor
-            rootExecutor.isAvailable() -> rootExecutor
-            adbExecutor.isAvailable() -> adbExecutor
-            else -> null
+        val now = System.currentTimeMillis()
+        if (cachedExecutor == null || now - lastChecked > 10000) {
+            cachedExecutor = when {
+                shizukuExecutor.isAvailable() -> shizukuExecutor
+                rootExecutor.isAvailable() -> rootExecutor
+                adbExecutor.isAvailable() -> adbExecutor
+                else -> null
+            }
+            lastChecked = now
         }
+        return cachedExecutor
     }
 
     fun getActiveBackendName(): String {

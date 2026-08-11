@@ -73,18 +73,20 @@ fun AppExplorerScreen(shellService: ShellService) {
         loadApps()
     }
 
-    val filteredApps = appList.filter { app ->
-        val matchesFilter = when (filterMode) {
-            "USER" -> !app.isSystem
-            "SYSTEM" -> app.isSystem
-            "ENABLED" -> app.isEnabled
-            "DISABLED" -> !app.isEnabled
-            else -> true
+    val filteredApps = remember(appList, filterMode, searchQuery) {
+        appList.filter { app ->
+            val matchesFilter = when (filterMode) {
+                "USER" -> !app.isSystem
+                "SYSTEM" -> app.isSystem
+                "ENABLED" -> app.isEnabled
+                "DISABLED" -> !app.isEnabled
+                else -> true
+            }
+            val matchesSearch = app.appName.contains(searchQuery, ignoreCase = true) || 
+                    app.packageName.contains(searchQuery, ignoreCase = true)
+            
+            matchesFilter && matchesSearch
         }
-        val matchesSearch = app.appName.contains(searchQuery, ignoreCase = true) || 
-                app.packageName.contains(searchQuery, ignoreCase = true)
-        
-        matchesFilter && matchesSearch
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -135,7 +137,7 @@ fun AppExplorerScreen(shellService: ShellService) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredApps) { app ->
+                items(filteredApps, key = { it.packageName }) { app ->
                     AppRowCard(
                         app = app,
                         onClick = {
@@ -210,9 +212,8 @@ private suspend fun fetchAppDetails(context: Context, app: AppItem, shellService
 @Composable
 fun AppRowCard(app: AppItem, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -229,12 +230,28 @@ fun AppRowCard(app: AppItem, onClick: () -> Unit) {
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            SuggestionChip(
-                onClick = {},
-                label = { Text(if (app.isSystem) "System" else "User", fontSize = 10.sp) },
-                enabled = false
-            )
+            ThemedBadge(text = if (app.isSystem) "System" else "User")
         }
+    }
+}
+
+@Composable
+fun ThemedBadge(text: String) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontSize = 10.sp
+        )
     }
 }
 
@@ -410,11 +427,25 @@ fun ComponentExpandableRow(title: String, list: List<String>) {
                     Text(text = "None declared", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        list.forEach { item ->
+                        // Limit component view to prevent UI thread blocking / frozen frame rates
+                        val displayLimit = 30
+                        val displayList = if (list.size > displayLimit) list.take(displayLimit) else list
+                        
+                        displayList.forEach { item ->
                             Text(
                                 text = item,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                            )
+                        }
+                        
+                        if (list.size > displayLimit) {
+                            Text(
+                                text = "... and ${list.size - displayLimit} more components",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp)
                             )
                         }
                     }

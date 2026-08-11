@@ -55,9 +55,11 @@ fun SettingsExplorerScreen(
         refreshSettings()
     }
 
-    val filteredSettings = settingsList.filter {
-        it.key.contains(searchQuery, ignoreCase = true) || 
-                it.value.contains(searchQuery, ignoreCase = true)
+    val filteredSettings = remember(settingsList, searchQuery) {
+        settingsList.filter {
+            it.key.contains(searchQuery, ignoreCase = true) || 
+                    it.value.contains(searchQuery, ignoreCase = true)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -116,7 +118,7 @@ fun SettingsExplorerScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredSettings) { item ->
+                items(filteredSettings, key = { "${it.namespace}_${it.key}" }) { item ->
                     SettingCard(
                         item = item,
                         onClick = {
@@ -171,9 +173,8 @@ fun SettingCard(
     onClick: () -> Unit
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -198,13 +199,29 @@ fun SettingCard(
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                SuggestionChip(
-                    onClick = {},
-                    label = { Text(item.namespace, fontSize = 10.sp) },
-                    enabled = false
-                )
+                ThemedBadge(text = item.namespace)
             }
         }
+    }
+}
+
+@Composable
+fun ThemedBadge(text: String) {
+    Box(
+        modifier = Modifier
+            .background(
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontSize = 10.sp
+        )
     }
 }
 

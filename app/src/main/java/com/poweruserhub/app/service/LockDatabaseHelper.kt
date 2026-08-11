@@ -44,23 +44,29 @@ class LockDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
     fun getAllLocks(): List<SettingLock> {
         val list = mutableListOf<SettingLock>()
         val db = readableDatabase
-        val cursor = db.query(TABLE_NAME, null, null, null, null, null, null)
-        
-        if (cursor.moveToFirst()) {
-            do {
-                val id = cursor.getInt(cursor.getColumnIndexOrThrow(COLUMN_ID))
-                val key = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_KEY))
-                val namespace = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_NAMESPACE))
-                val desiredValue = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_DESIRED_VALUE))
-                val isEnabled = cursor.getInt(cursor.getColumnIndexOrThrow(COLUMN_IS_ENABLED)) == 1
-                val lastVerified = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_LAST_VERIFIED))
-                val status = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_STATUS))
+        db.query(TABLE_NAME, null, null, null, null, null, null).use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idIdx = cursor.getColumnIndexOrThrow(COLUMN_ID)
+                val keyIdx = cursor.getColumnIndexOrThrow(COLUMN_KEY)
+                val nsIdx = cursor.getColumnIndexOrThrow(COLUMN_NAMESPACE)
+                val valIdx = cursor.getColumnIndexOrThrow(COLUMN_DESIRED_VALUE)
+                val enabledIdx = cursor.getColumnIndexOrThrow(COLUMN_IS_ENABLED)
+                val verifiedIdx = cursor.getColumnIndexOrThrow(COLUMN_LAST_VERIFIED)
+                val statusIdx = cursor.getColumnIndexOrThrow(COLUMN_STATUS)
                 
-                list.add(SettingLock(id, key, namespace, desiredValue, isEnabled, lastVerified, status))
-            } while (cursor.moveToNext())
+                do {
+                    val id = cursor.getInt(idIdx)
+                    val key = cursor.getString(keyIdx)
+                    val namespace = cursor.getString(nsIdx)
+                    val desiredValue = cursor.getString(valIdx)
+                    val isEnabled = cursor.getInt(enabledIdx) == 1
+                    val lastVerified = cursor.getString(verifiedIdx)
+                    val status = cursor.getString(statusIdx)
+                    
+                    list.add(SettingLock(id, key, namespace, desiredValue, isEnabled, lastVerified, status))
+                } while (cursor.moveToNext())
+            }
         }
-        cursor.close()
-        db.close()
         return list
     }
 
@@ -76,13 +82,11 @@ class LockDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
         }
         
         val rows = db.update(TABLE_NAME, values, "$COLUMN_KEY = ?", arrayOf(lock.key))
-        val result = if (rows == 0) {
+        return if (rows == 0) {
             db.insert(TABLE_NAME, null, values) != -1L
         } else {
             true
         }
-        db.close()
-        return result
     }
 
     fun updateLockStatus(key: String, status: String, timestamp: String): Boolean {
@@ -92,14 +96,12 @@ class LockDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_
             put(COLUMN_LAST_VERIFIED, timestamp)
         }
         val rows = db.update(TABLE_NAME, values, "$COLUMN_KEY = ?", arrayOf(key))
-        db.close()
         return rows > 0
     }
 
     fun deleteLock(key: String): Boolean {
         val db = writableDatabase
         val rows = db.delete(TABLE_NAME, "$COLUMN_KEY = ?", arrayOf(key))
-        db.close()
         return rows > 0
     }
 }

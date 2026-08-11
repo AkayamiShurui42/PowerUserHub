@@ -183,6 +183,9 @@ fun AdvancedDeveloperModeScreen(shellService: ShellService) {
                         if (commandInput.trim().isNotEmpty()) {
                             val cmd = commandInput.trim()
                             consoleLogs.add("$ $cmd")
+                            while (consoleLogs.size > 200) {
+                                consoleLogs.removeAt(0)
+                            }
                             commandInput = ""
                             coroutineScope.launch {
                                 val result = shellService.executeCommand(cmd)
@@ -194,6 +197,9 @@ fun AdvancedDeveloperModeScreen(shellService: ShellService) {
                                     }
                                 } else {
                                     consoleLogs.add("Error: ${result.stderr}")
+                                }
+                                while (consoleLogs.size > 200) {
+                                    consoleLogs.removeAt(0)
                                 }
                             }
                         }
