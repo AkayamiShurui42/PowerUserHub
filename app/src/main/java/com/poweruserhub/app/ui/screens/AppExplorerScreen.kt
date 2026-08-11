@@ -50,9 +50,10 @@ fun AppExplorerScreen(shellService: ShellService) {
             val pm = context.packageManager
             val packages = pm.getInstalledPackages(0)
             val list = packages.map { pkg ->
-                val isSystem = (pkg.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                val isEnabled = pkg.applicationInfo.enabled
-                val appName = pkg.applicationInfo.loadLabel(pm).toString()
+                val appInfo = pkg.applicationInfo
+                val isSystem = appInfo?.let { (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0 } ?: false
+                val isEnabled = appInfo?.enabled ?: true
+                val appName = appInfo?.loadLabel(pm)?.toString() ?: pkg.packageName
                 
                 AppItem(
                     packageName = pkg.packageName,

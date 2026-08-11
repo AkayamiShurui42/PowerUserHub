@@ -27,7 +27,14 @@ class ShizukuExecutor : CommandExecutor {
         var errReader: BufferedReader? = null
         return try {
             val cmdArgs = parseCommand(command).toTypedArray()
-            process = Shizuku.newProcess(cmdArgs, null, null)
+            val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            newProcessMethod.isAccessible = true
+            process = newProcessMethod.invoke(null, cmdArgs, null, null) as java.lang.Process
             
             val stdoutBuilder = StringBuilder()
             val stderrBuilder = StringBuilder()

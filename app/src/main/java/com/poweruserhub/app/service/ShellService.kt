@@ -9,6 +9,10 @@ import java.util.Locale
 
 class ShellService(private val context: Context) {
 
+    private val shizukuExecutor = ShizukuExecutor()
+    private val rootExecutor = RootExecutor()
+    private val adbExecutor = AdbExecutor(context)
+
     private var cachedExecutor: CommandExecutor? = null
     private var lastChecked: Long = 0
 
@@ -118,7 +122,7 @@ class ShellService(private val context: Context) {
             "GLOBAL" -> listOf(
                 "wifi_on",
                 "bluetooth_on",
-                Settings.Global.MOBILE_DATA,
+                "mobile_data",
                 Settings.Global.AIRPLANE_MODE_ON,
                 Settings.Global.AUTO_TIME,
                 "development_settings_enabled"
