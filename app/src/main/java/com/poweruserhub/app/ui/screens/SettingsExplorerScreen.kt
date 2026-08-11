@@ -1,6 +1,7 @@
 package com.poweruserhub.app.ui.screens
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -206,7 +207,7 @@ fun SettingCard(
 }
 
 @Composable
-fun ThemedBadge(text: String) {
+private fun ThemedBadge(text: String) {
     Box(
         modifier = Modifier
             .background(

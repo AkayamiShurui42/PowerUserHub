@@ -2,6 +2,7 @@ package com.poweruserhub.app.ui.screens
 
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -223,7 +224,7 @@ fun RunningAppCard(app: AppItem) {
 }
 
 @Composable
-fun ThemedBadge(text: String) {
+private fun ThemedBadge(text: String) {
     Box(
         modifier = Modifier
             .background(
