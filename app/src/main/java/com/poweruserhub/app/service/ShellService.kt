@@ -3,8 +3,6 @@ package com.poweruserhub.app.service
 import android.content.Context
 import android.provider.Settings
 import com.poweruserhub.app.model.SettingItem
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 class ShellService(private val context: Context) {
@@ -15,11 +13,12 @@ class ShellService(private val context: Context) {
 
     private var cachedExecutor: CommandExecutor? = null
     private var lastChecked: Long = 0
+    @Volatile private var lastSettingsDiagnostic: String = ""
 
     @Synchronized
     fun getActiveExecutor(): CommandExecutor? {
         val now = System.currentTimeMillis()
-        if (cachedExecutor == null || now - lastChecked > 10000) {
+        if (cachedExecutor == null || now - lastChecked > 10_000) {
             cachedExecutor = when {
                 shizukuExecutor.isAvailable() -> shizukuExecutor
                 rootExecutor.isAvailable() -> rootExecutor
@@ -31,34 +30,78 @@ class ShellService(private val context: Context) {
         return cachedExecutor
     }
 
-    fun getActiveBackendName(): String {
-        return getActiveExecutor()?.getName() ?: "None (Limited Mode)"
+    fun invalidateBackendCache() {
+        cachedExecutor = null
+        lastChecked = 0
     }
 
-    fun isPrivilegedActive(): Boolean {
-        return getActiveExecutor() != null
+    fun getActiveBackendName(): String {
+        val executor = getActiveExecutor() ?: return "None (Limited Mode)"
+        if (executor !== shizukuExecutor) return executor.getName()
+
+        val plus = isShizukuPlusInstalled()
+        val uidResult = executor.execute("id -u")
+        val identity = if (uidResult.isSuccess) {
+            when (uidResult.stdout.trim()) {
+                "0" -> "root · uid 0"
+                "1000" -> "system · uid 1000"
+                "2000" -> "shell · uid 2000"
+                else -> "uid ${uidResult.stdout.trim()}"
+            }
+        } else {
+            "authorized"
+        }
+        return if (plus) "Shizuku+ ($identity)" else "Shizuku ($identity)"
     }
+
+    fun isShizukuPlusInstalled(): Boolean {
+        return hasPackage("af.shizuku.plus.api") ||
+            hasPackage("af.shizuku.plus")
+    }
+
+    private fun hasPackage(packageName: String): Boolean {
+        return try {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(packageName, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun isPrivilegedActive(): Boolean = getActiveExecutor() != null
 
     fun executeCommand(command: String): CommandResult {
         val executor = getActiveExecutor()
         return executor?.execute(command) ?: CommandResult(
-            -1, 
-            "", 
+            -1,
+            "",
             "No active execution backend (Shizuku, Root, or ADB) is authorized."
         )
     }
 
+    fun getPrivilegeProbe(): CommandResult {
+        return executeCommand(
+            "printf 'uid='; id -u; " +
+                "printf 'user='; id -un; " +
+                "printf 'settings='; command -v settings 2>/dev/null || true; " +
+                "printf 'pm='; command -v pm 2>/dev/null || true; " +
+                "printf 'am='; command -v am 2>/dev/null || true"
+        )
+    }
+
+    fun getLastSettingsDiagnostic(): String = lastSettingsDiagnostic
+
     fun readSetting(namespace: String, key: String): String {
+        val ns = normalizeNamespace(namespace) ?: return "Error: invalid namespace"
         val executor = getActiveExecutor()
         if (executor != null) {
-            val ns = namespace.lowercase(Locale.ROOT)
-            val result = executor.execute("settings get $ns $key")
+            val result = executor.execute("settings get $ns ${shellQuote(key)}")
             if (result.isSuccess && result.stdout.trim() != "null") {
                 return result.stdout.trim()
             }
         }
-        
-        // Fallback to ContentResolver for reading
+
         return try {
             val resolver = context.contentResolver
             when (namespace.uppercase(Locale.ROOT)) {
@@ -74,48 +117,139 @@ class ShellService(private val context: Context) {
 
     fun writeSetting(namespace: String, key: String, value: String): CommandResult {
         val executor = getActiveExecutor() ?: return CommandResult(
-            -1, 
-            "", 
-            "Writing settings requires Shizuku, Root, or ADB backend."
+            -1,
+            "",
+            "Writing settings requires an authorized Shizuku, Root, or ADB backend."
         )
-        val ns = namespace.lowercase(Locale.ROOT)
-        return executor.execute("settings put $ns $key \"$value\"")
+        val ns = normalizeNamespace(namespace)
+            ?: return CommandResult(-1, "", "Unknown settings namespace: $namespace")
+
+        val result = executor.execute(
+            "settings put $ns ${shellQuote(key)} ${shellQuote(value)}"
+        )
+        if (!result.isSuccess) return result
+
+        val readBack = executor.execute("settings get $ns ${shellQuote(key)}")
+        if (!readBack.isSuccess) {
+            return CommandResult(
+                -4,
+                result.stdout,
+                "Write command returned success, but read-back failed: ${readBack.stderr}"
+            )
+        }
+        if (readBack.stdout.trim() != value) {
+            return CommandResult(
+                -5,
+                readBack.stdout,
+                "Write was not verified. Expected '$value', read back '${readBack.stdout.trim()}'."
+            )
+        }
+        return CommandResult(0, readBack.stdout.trim(), "")
     }
 
     fun readSettingsList(namespace: String): List<SettingItem> {
-        val executor = getActiveExecutor()
-        val items = mutableListOf<SettingItem>()
-
-        if (executor != null) {
-            val ns = namespace.lowercase(Locale.ROOT)
-            val result = executor.execute("settings list $ns")
-            if (result.isSuccess) {
-                result.stdout.split("\n").forEach { line ->
-                    if (line.contains("=")) {
-                        val parts = line.split("=", limit = 2)
-                        if (parts.size == 2) {
-                            items.add(SettingItem(parts[0], parts[1], namespace))
-                        }
-                    }
-                }
-                return items.sortedBy { it.key }
-            }
+        val ns = normalizeNamespace(namespace) ?: run {
+            lastSettingsDiagnostic = "Invalid namespace: $namespace"
+            return emptyList()
         }
 
-        // Fallback to reading popular settings keys via ContentResolver
+        val executor = getActiveExecutor()
+        if (executor != null) {
+            val result = executor.execute("settings list $ns")
+            if (result.isSuccess) {
+                val parsed = parseSettingsOutput(result.stdout, namespace)
+                if (parsed.isNotEmpty()) {
+                    lastSettingsDiagnostic = "Loaded ${parsed.size} $namespace rows through ${getActiveBackendName()}."
+                    return parsed
+                }
+                lastSettingsDiagnostic = "Privileged command succeeded but returned no $namespace rows."
+            } else {
+                lastSettingsDiagnostic = "Privileged settings query failed (${result.exitCode}): ${result.stderr.ifBlank { "no stderr" }}"
+            }
+        } else {
+            lastSettingsDiagnostic = "No authorized privileged backend. Trying Android SettingsProvider directly."
+        }
+
+        // A full provider query is much more useful than the previous five-key fallback.
+        val providerRows = readSettingsProvider(namespace)
+        if (providerRows.isNotEmpty()) {
+            lastSettingsDiagnostic += " Provider fallback returned ${providerRows.size} readable rows."
+            return providerRows
+        }
+
+        // Last-resort known keys for ROMs which block table enumeration entirely.
+        val fallback = readKnownSettings(namespace)
+        if (fallback.isNotEmpty()) {
+            lastSettingsDiagnostic += " Restricted provider fallback returned ${fallback.size} known rows."
+        } else {
+            lastSettingsDiagnostic += " No rows were readable. Check Shizuku authorization and service identity."
+        }
+        return fallback
+    }
+
+    private fun parseSettingsOutput(output: String, namespace: String): List<SettingItem> {
+        return output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it.contains('=') }
+            .mapNotNull { line ->
+                val index = line.indexOf('=')
+                if (index <= 0) null
+                else SettingItem(
+                    key = line.substring(0, index),
+                    value = line.substring(index + 1),
+                    namespace = namespace
+                )
+            }
+            .distinctBy { it.key }
+            .sortedBy { it.key.lowercase(Locale.ROOT) }
+            .toList()
+    }
+
+    private fun readSettingsProvider(namespace: String): List<SettingItem> {
+        val uri = when (namespace.uppercase(Locale.ROOT)) {
+            "SYSTEM" -> Settings.System.CONTENT_URI
+            "SECURE" -> Settings.Secure.CONTENT_URI
+            "GLOBAL" -> Settings.Global.CONTENT_URI
+            else -> return emptyList()
+        }
+        return try {
+            val rows = mutableListOf<SettingItem>()
+            context.contentResolver.query(
+                uri,
+                arrayOf("name", "value"),
+                null,
+                null,
+                "name ASC"
+            )?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                val valueIndex = cursor.getColumnIndex("value")
+                while (cursor.moveToNext()) {
+                    if (nameIndex < 0) continue
+                    val key = cursor.getString(nameIndex) ?: continue
+                    val value = if (valueIndex >= 0) cursor.getString(valueIndex) ?: "" else ""
+                    rows.add(SettingItem(key, value, namespace))
+                }
+            }
+            rows.distinctBy { it.key }.sortedBy { it.key.lowercase(Locale.ROOT) }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun readKnownSettings(namespace: String): List<SettingItem> {
         val resolver = context.contentResolver
-        val popularKeys = when (namespace.uppercase(Locale.ROOT)) {
+        val keys = when (namespace.uppercase(Locale.ROOT)) {
             "SYSTEM" -> listOf(
                 Settings.System.SCREEN_BRIGHTNESS,
                 Settings.System.SCREEN_OFF_TIMEOUT,
                 Settings.System.ACCELEROMETER_ROTATION,
-                Settings.System.HAPTIC_FEEDBACK_ENABLED,
+                "haptic_feedback_enabled",
                 Settings.System.SOUND_EFFECTS_ENABLED
             )
             "SECURE" -> listOf(
-                Settings.Secure.ADB_ENABLED,
-                Settings.Secure.LOCATION_MODE,
-                Settings.Secure.INSTALL_NON_MARKET_APPS,
+                "adb_enabled",
+                "location_mode",
+                "install_non_market_apps",
                 "sleep_timeout",
                 "secure_properties"
             )
@@ -130,7 +264,7 @@ class ShellService(private val context: Context) {
             else -> emptyList()
         }
 
-        popularKeys.forEach { key ->
+        return keys.mapNotNull { key ->
             try {
                 val value = when (namespace.uppercase(Locale.ROOT)) {
                     "SYSTEM" -> Settings.System.getString(resolver, key)
@@ -138,63 +272,109 @@ class ShellService(private val context: Context) {
                     "GLOBAL" -> Settings.Global.getString(resolver, key)
                     else -> null
                 }
-                if (value != null) {
-                    items.add(SettingItem(key, value, namespace))
-                }
-            } catch (e: Exception) {
-                // Ignore key read errors in fallback
+                value?.let { SettingItem(key, it, namespace) }
+            } catch (_: Exception) {
+                null
             }
-        }
-        return items.sortedBy { it.key }
+        }.sortedBy { it.key.lowercase(Locale.ROOT) }
     }
 
-    // Battery Optimization
+    // Component control -------------------------------------------------------
+
+    fun startService(packageName: String, componentName: String, foreground: Boolean = false): CommandResult {
+        val verb = if (foreground) "start-foreground-service" else "startservice"
+        return executeCommand("am $verb --user 0 -n ${shellQuote(componentSpec(packageName, componentName))}")
+    }
+
+    fun stopService(packageName: String, componentName: String): CommandResult {
+        return executeCommand("am stopservice --user 0 -n ${shellQuote(componentSpec(packageName, componentName))}")
+    }
+
+    fun sendBroadcast(packageName: String, componentName: String, action: String? = null): CommandResult {
+        val actionArg = action?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { " -a ${shellQuote(it)}" }
+            ?: ""
+        return executeCommand(
+            "am broadcast --user 0$actionArg -n ${shellQuote(componentSpec(packageName, componentName))}"
+        )
+    }
+
+    fun setComponentEnabled(packageName: String, componentName: String, enabled: Boolean): CommandResult {
+        val command = if (enabled) "pm enable --user 0" else "pm disable-user --user 0"
+        val spec = componentSpec(packageName, componentName)
+        val result = executeCommand("$command ${shellQuote(spec)}")
+        if (!result.isSuccess) return result
+
+        val verify = executeCommand("pm get-component-enabled-setting ${shellQuote(spec)}")
+        return if (verify.isSuccess) {
+            CommandResult(0, verify.stdout, "")
+        } else {
+            CommandResult(-4, result.stdout, "Component command ran, but verification failed: ${verify.stderr}")
+        }
+    }
+
+    private fun componentSpec(packageName: String, componentName: String): String {
+        return "$packageName/$componentName"
+    }
+
+    // Battery Optimization ---------------------------------------------------
+
     fun setBatteryExempted(packageName: String, exempt: Boolean): CommandResult {
         val flag = if (exempt) "+" else "-"
-        return executeCommand("dumpsys deviceidle whitelist $flag$packageName")
+        return executeCommand("dumpsys deviceidle whitelist ${shellQuote(flag + packageName)}")
     }
 
     fun isBatteryExempted(packageName: String): Boolean {
         val result = executeCommand("dumpsys deviceidle whitelist")
-        return if (result.isSuccess) {
-            result.stdout.contains(packageName)
-        } else {
-            false
-        }
+        return result.isSuccess && result.stdout.contains(packageName)
     }
 
-    // App Standby Bucket
+    // App Standby Bucket -----------------------------------------------------
+
     fun setStandbyBucket(packageName: String, bucket: String): CommandResult {
-        return executeCommand("am set-standby-bucket $packageName $bucket")
+        return executeCommand("am set-standby-bucket ${shellQuote(packageName)} ${shellQuote(bucket)}")
     }
 
     fun getStandbyBucket(packageName: String): String {
-        val result = executeCommand("am get-standby-bucket $packageName")
+        val result = executeCommand("am get-standby-bucket ${shellQuote(packageName)}")
         if (result.isSuccess) {
             val output = result.stdout.trim()
-            // am get-standby-bucket output format: "10" or "App Standby Bucket: active"
-            if (output.contains("active") || output.contains("10")) return "active"
-            if (output.contains("working_set") || output.contains("20")) return "working_set"
-            if (output.contains("frequent") || output.contains("30")) return "frequent"
-            if (output.contains("rare") || output.contains("40")) return "rare"
-            if (output.contains("restricted") || output.contains("45")) return "restricted"
+            if (output.contains("active") || output == "10") return "active"
+            if (output.contains("working_set") || output == "20") return "working_set"
+            if (output.contains("frequent") || output == "30") return "frequent"
+            if (output.contains("rare") || output == "40") return "rare"
+            if (output.contains("restricted") || output == "45") return "restricted"
             return output
         }
         return "unknown"
     }
 
-    // Background restrictions (AppOps)
+    // Background restrictions (AppOps) -------------------------------------
+
     fun setBackgroundRestricted(packageName: String, restricted: Boolean): CommandResult {
         val mode = if (restricted) "ignore" else "allow"
-        return executeCommand("cmd appops set $packageName RUN_IN_BACKGROUND $mode")
+        return executeCommand(
+            "cmd appops set ${shellQuote(packageName)} RUN_IN_BACKGROUND $mode"
+        )
     }
 
     fun isBackgroundRestricted(packageName: String): Boolean {
-        val result = executeCommand("cmd appops get $packageName RUN_IN_BACKGROUND")
-        return if (result.isSuccess) {
-            result.stdout.contains("ignore") || result.stdout.contains("deny")
-        } else {
-            false
+        val result = executeCommand(
+            "cmd appops get ${shellQuote(packageName)} RUN_IN_BACKGROUND"
+        )
+        return result.isSuccess && (result.stdout.contains("ignore") || result.stdout.contains("deny"))
+    }
+
+    private fun normalizeNamespace(namespace: String): String? {
+        return when (namespace.uppercase(Locale.ROOT)) {
+            "SYSTEM" -> "system"
+            "SECURE" -> "secure"
+            "GLOBAL" -> "global"
+            else -> null
         }
+    }
+
+    private fun shellQuote(value: String): String {
+        return "'" + value.replace("'", "'\\''") + "'"
     }
 }
