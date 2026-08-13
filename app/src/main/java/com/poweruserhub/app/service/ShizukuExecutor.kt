@@ -1,32 +1,48 @@
 package com.poweruserhub.app.service
 
-import android.os.Build
 import rikka.shizuku.Shizuku
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
+/**
+ * Command backend backed by the Shizuku binder.
+ *
+ * Power User Hub intentionally executes through /system/bin/sh -c instead of trying
+ * to spawn commands such as `settings`, `pm`, and `am` as standalone executables.
+ * This gives the remote process the Android shell environment and also makes the
+ * backend compatible with Shizuku+ transparent shell interception.
+ *
+ * Shizuku's legacy newProcess API is deprecated upstream in favour of UserService,
+ * but it remains the broadest compatibility path for stock Shizuku and Shizuku+
+ * while the app migrates privileged operations to typed binder services.
+ */
 class ShizukuExecutor : CommandExecutor {
 
     override fun getName(): String = "Shizuku"
 
     override fun isAvailable(): Boolean {
         return try {
-            Shizuku.pingBinder() && 
-                    Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
-        } catch (e: Throwable) {
+            Shizuku.pingBinder() &&
+                Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) {
             false
         }
     }
 
     override fun execute(command: String): CommandResult {
         if (!isAvailable()) {
-            return CommandResult(-1, "", "Shizuku service not available or not authorized.")
+            return CommandResult(-1, "", "Shizuku service is not available or Power User Hub is not authorized.")
         }
+
         var process: java.lang.Process? = null
         var outReader: BufferedReader? = null
         var errReader: BufferedReader? = null
+
         return try {
-            val cmdArgs = parseCommand(command).toTypedArray()
+            // Keep reflection for API/fork compatibility, but always launch a real Android shell.
+            // This fixes PATH/environment failures seen when invoking `settings` directly.
+            val shellArgs = arrayOf("/system/bin/sh", "-c", command)
             val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
                 Array<String>::class.java,
@@ -34,94 +50,62 @@ class ShizukuExecutor : CommandExecutor {
                 String::class.java
             )
             newProcessMethod.isAccessible = true
-            process = newProcessMethod.invoke(null, cmdArgs, null, null) as java.lang.Process
-            
+            process = newProcessMethod.invoke(null, shellArgs, null, null) as java.lang.Process
+
             val stdoutBuilder = StringBuilder()
             val stderrBuilder = StringBuilder()
-            
             outReader = BufferedReader(InputStreamReader(process.inputStream))
             errReader = BufferedReader(InputStreamReader(process.errorStream))
-            
+
             val outThread = Thread {
                 try {
                     var line: String?
                     while (outReader.readLine().also { line = it } != null) {
-                        stdoutBuilder.append(line).append("\n")
+                        stdoutBuilder.append(line).append('\n')
                     }
-                } catch (e: Exception) {}
+                } catch (_: Exception) {
+                }
             }
-            
             val errThread = Thread {
                 try {
                     var line: String?
                     while (errReader.readLine().also { line = it } != null) {
-                        stderrBuilder.append(line).append("\n")
+                        stderrBuilder.append(line).append('\n')
                     }
-                } catch (e: Exception) {}
+                } catch (_: Exception) {
+                }
             }
-            
+
             outThread.start()
             errThread.start()
-            
-            val exited = process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+
+            val exited = process.waitFor(15, TimeUnit.SECONDS)
             if (!exited) {
-                process.destroy()
-                CommandResult(-3, "", "Execution timed out")
+                process.destroyForcibly()
+                CommandResult(-3, stdoutBuilder.toString().trim(), "Execution timed out after 15 seconds")
             } else {
                 outThread.join(2000)
                 errThread.join(2000)
-                val exitCode = process.exitValue()
-                CommandResult(exitCode, stdoutBuilder.toString().trim(), stderrBuilder.toString().trim())
+                CommandResult(
+                    process.exitValue(),
+                    stdoutBuilder.toString().trim(),
+                    stderrBuilder.toString().trim()
+                )
             }
-        } catch (e: Exception) {
-            CommandResult(-2, "", e.message ?: "Unknown Shizuku execution error")
+        } catch (e: Throwable) {
+            val cause = e.cause ?: e
+            CommandResult(
+                -2,
+                "",
+                "Shizuku execution failed: ${cause.javaClass.simpleName}: ${cause.message ?: "unknown error"}"
+            )
         } finally {
-            try { outReader?.close() } catch (e: Exception) {}
-            try { errReader?.close() } catch (e: Exception) {}
-            try { process?.inputStream?.close() } catch (e: Exception) {}
-            try { process?.outputStream?.close() } catch (e: Exception) {}
-            try { process?.errorStream?.close() } catch (e: Exception) {}
-            try { process?.destroy() } catch (e: Exception) {}
+            try { outReader?.close() } catch (_: Exception) {}
+            try { errReader?.close() } catch (_: Exception) {}
+            try { process?.inputStream?.close() } catch (_: Exception) {}
+            try { process?.outputStream?.close() } catch (_: Exception) {}
+            try { process?.errorStream?.close() } catch (_: Exception) {}
+            try { process?.destroy() } catch (_: Exception) {}
         }
-    }
-
-    private fun parseCommand(command: String): List<String> {
-        val list = mutableListOf<String>()
-        val current = StringBuilder()
-        var inDoubleQuotes = false
-        var inSingleQuotes = false
-        var escaped = false
-        var i = 0
-        while (i < command.length) {
-            val c = command[i]
-            if (escaped) {
-                current.append(c)
-                escaped = false
-            } else if (c == '\\') {
-                escaped = true
-            } else if (c == '\"' && !inSingleQuotes) {
-                inDoubleQuotes = !inDoubleQuotes
-            } else if (c == '\'' && !inDoubleQuotes) {
-                inSingleQuotes = !inSingleQuotes
-            } else if ((c == ' ' || c == '\t' || c == '\n') && !inDoubleQuotes && !inSingleQuotes) {
-                if (current.isNotEmpty()) {
-                    list.add(current.toString())
-                    current.setLength(0)
-                }
-            } else {
-                current.append(c)
-            }
-            i++
-        }
-        if (current.isNotEmpty()) {
-            list.add(current.toString())
-        }
-        // If it starts with "adb shell ", strip it as Shizuku runs commands in shell context directly
-        if (list.isNotEmpty() && list[0] == "adb") {
-            if (list.size > 2 && list[1] == "shell") {
-                return list.subList(2, list.size)
-            }
-        }
-        return list
     }
 }
