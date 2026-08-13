@@ -55,8 +55,7 @@ class ShellService(private val context: Context) {
     }
 
     fun isShizukuPlusInstalled(): Boolean {
-        return hasPackage("af.shizuku.plus.api") ||
-            hasPackage("af.shizuku.plus")
+        return hasPackage("af.shizuku.plus.api") || hasPackage("af.shizuku.plus")
     }
 
     private fun hasPackage(packageName: String): Boolean {
@@ -88,6 +87,40 @@ class ShellService(private val context: Context) {
                 "printf 'pm='; command -v pm 2>/dev/null || true; " +
                 "printf 'am='; command -v am 2>/dev/null || true"
         )
+    }
+
+    /**
+     * WRITE_SECURE_SETTINGS is a development/signature permission; merely declaring it
+     * in AndroidManifest.xml does not grant it to a normal installed APK. Once Shizuku
+     * or root is authorized, use that privileged identity to grant the declared
+     * permission to Power User Hub itself. This makes direct SettingsProvider fallback
+     * and APIs that check the app UID work in addition to shell-backed operations.
+     */
+    fun ensureAppPrivilegedPermissions(): CommandResult {
+        val permission = android.Manifest.permission.WRITE_SECURE_SETTINGS
+        if (context.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return CommandResult(0, "WRITE_SECURE_SETTINGS already granted", "")
+        }
+
+        val executor = getActiveExecutor() ?: return CommandResult(
+            -1,
+            "",
+            "Cannot grant WRITE_SECURE_SETTINGS without an authorized privileged backend."
+        )
+        val result = executor.execute(
+            "pm grant ${shellQuote(context.packageName)} ${shellQuote(permission)}"
+        )
+        if (!result.isSuccess) return result
+
+        return if (context.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            CommandResult(0, "WRITE_SECURE_SETTINGS granted", "")
+        } else {
+            CommandResult(
+                -6,
+                result.stdout,
+                "pm grant returned success but Android did not report WRITE_SECURE_SETTINGS as granted."
+            )
+        }
     }
 
     fun getLastSettingsDiagnostic(): String = lastSettingsDiagnostic
@@ -154,30 +187,39 @@ class ShellService(private val context: Context) {
         }
 
         val executor = getActiveExecutor()
+        var permissionDiagnostic = ""
         if (executor != null) {
+            val permissionResult = ensureAppPrivilegedPermissions()
+            permissionDiagnostic = if (permissionResult.isSuccess) {
+                "${permissionResult.stdout}. "
+            } else {
+                "WRITE_SECURE_SETTINGS bootstrap failed: ${permissionResult.stderr.ifBlank { permissionResult.stdout }}. "
+            }
+
             val result = executor.execute("settings list $ns")
             if (result.isSuccess) {
                 val parsed = parseSettingsOutput(result.stdout, namespace)
                 if (parsed.isNotEmpty()) {
-                    lastSettingsDiagnostic = "Loaded ${parsed.size} $namespace rows through ${getActiveBackendName()}."
+                    lastSettingsDiagnostic = permissionDiagnostic +
+                        "Loaded ${parsed.size} $namespace rows through ${getActiveBackendName()}."
                     return parsed
                 }
-                lastSettingsDiagnostic = "Privileged command succeeded but returned no $namespace rows."
+                lastSettingsDiagnostic = permissionDiagnostic +
+                    "Privileged command succeeded but returned no $namespace rows."
             } else {
-                lastSettingsDiagnostic = "Privileged settings query failed (${result.exitCode}): ${result.stderr.ifBlank { "no stderr" }}"
+                lastSettingsDiagnostic = permissionDiagnostic +
+                    "Privileged settings query failed (${result.exitCode}): ${result.stderr.ifBlank { "no stderr" }}"
             }
         } else {
             lastSettingsDiagnostic = "No authorized privileged backend. Trying Android SettingsProvider directly."
         }
 
-        // A full provider query is much more useful than the previous five-key fallback.
         val providerRows = readSettingsProvider(namespace)
         if (providerRows.isNotEmpty()) {
             lastSettingsDiagnostic += " Provider fallback returned ${providerRows.size} readable rows."
             return providerRows
         }
 
-        // Last-resort known keys for ROMs which block table enumeration entirely.
         val fallback = readKnownSettings(namespace)
         if (fallback.isNotEmpty()) {
             lastSettingsDiagnostic += " Restricted provider fallback returned ${fallback.size} known rows."
