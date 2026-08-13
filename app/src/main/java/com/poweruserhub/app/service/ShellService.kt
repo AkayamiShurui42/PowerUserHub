@@ -324,12 +324,12 @@ class ShellService(private val context: Context) {
     // Component control -------------------------------------------------------
 
     fun startService(packageName: String, componentName: String, foreground: Boolean = false): CommandResult {
-        val verb = if (foreground) "start-foreground-service" else "startservice"
-        return executeCommand("am $verb --user 0 -n ${shellQuote(componentSpec(packageName, componentName))}")
+        val verb = if (foreground) "start-foreground-service" else "start-service"
+        return executeCommand("am $verb --user current -n ${shellQuote(componentSpec(packageName, componentName))}")
     }
 
     fun stopService(packageName: String, componentName: String): CommandResult {
-        return executeCommand("am stopservice --user 0 -n ${shellQuote(componentSpec(packageName, componentName))}")
+        return executeCommand("am stop-service --user current -n ${shellQuote(componentSpec(packageName, componentName))}")
     }
 
     fun sendBroadcast(packageName: String, componentName: String, action: String? = null): CommandResult {
@@ -337,21 +337,29 @@ class ShellService(private val context: Context) {
             ?.let { " -a ${shellQuote(it)}" }
             ?: ""
         return executeCommand(
-            "am broadcast --user 0$actionArg -n ${shellQuote(componentSpec(packageName, componentName))}"
+            "am broadcast --user current$actionArg -n ${shellQuote(componentSpec(packageName, componentName))}"
         )
     }
 
     fun setComponentEnabled(packageName: String, componentName: String, enabled: Boolean): CommandResult {
-        val command = if (enabled) "pm enable --user 0" else "pm disable-user --user 0"
+        val command = if (enabled) "pm enable --user current" else "pm disable-user --user current"
         val spec = componentSpec(packageName, componentName)
         val result = executeCommand("$command ${shellQuote(spec)}")
         if (!result.isSuccess) return result
 
-        val verify = executeCommand("pm get-component-enabled-setting ${shellQuote(spec)}")
-        return if (verify.isSuccess) {
-            CommandResult(0, verify.stdout, "")
+        // PackageManagerShellCommand performs setComponentEnabledSetting() and then
+        // immediately calls getComponentEnabledSetting() before printing "new state".
+        // Treat that shell output as the read-back rather than issuing a nonexistent
+        // secondary pm command.
+        val expectedState = if (enabled) "enabled" else "disabled-user"
+        return if (result.stdout.contains("new state: $expectedState", ignoreCase = true)) {
+            CommandResult(0, result.stdout, "")
         } else {
-            CommandResult(-4, result.stdout, "Component command ran, but verification failed: ${verify.stderr}")
+            CommandResult(
+                -4,
+                result.stdout,
+                "Component command returned success but did not confirm expected state '$expectedState'."
+            )
         }
     }
 
