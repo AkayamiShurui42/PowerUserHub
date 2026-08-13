@@ -13,12 +13,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.poweruserhub.app.service.ShellService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -30,19 +32,44 @@ fun DashboardScreen(
     onNavigateToLocks: () -> Unit
 ) {
     var shizukuActive by remember { mutableStateOf(false) }
+    var shizukuPresent by remember { mutableStateOf(false) }
     var rootActive by remember { mutableStateOf(false) }
-    var activeBackend by remember { mutableStateOf("None") }
-    
-    // Refresh connection statuses
+    var activeBackend by remember { mutableStateOf("Detecting…") }
+    var probeText by remember { mutableStateOf("") }
+    var plusDetected by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
-        shizukuActive = try {
-            Shizuku.pingBinder() && 
-                Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
-        } catch (e: Throwable) {
-            false
+        while (true) {
+            val state = withContext(Dispatchers.IO) {
+                shellService.invalidateBackendCache()
+                val binder = try { Shizuku.pingBinder() } catch (_: Throwable) { false }
+                val authorized = try {
+                    binder && Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
+                } catch (_: Throwable) {
+                    false
+                }
+                val plus = shellService.isShizukuPlusInstalled()
+                val backend = shellService.getActiveBackendName()
+                val root = shellService.getActiveExecutor()?.getName() == "Root (su)"
+                val probe = if (authorized) shellService.getPrivilegeProbe() else null
+                arrayOf(
+                    binder.toString(),
+                    authorized.toString(),
+                    plus.toString(),
+                    backend,
+                    root.toString(),
+                    probe?.stdout.orEmpty()
+                )
+            }
+
+            shizukuPresent = state[0].toBoolean()
+            shizukuActive = state[1].toBoolean()
+            plusDetected = state[2].toBoolean()
+            activeBackend = state[3]
+            rootActive = state[4].toBoolean()
+            probeText = state[5]
+            delay(2000)
         }
-        rootActive = shellService.getActiveExecutor()?.getName() == "Root (su)"
-        activeBackend = shellService.getActiveBackendName()
     }
 
     Column(
@@ -52,7 +79,6 @@ fun DashboardScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Welcome Card with Gradient
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -61,8 +87,8 @@ fun DashboardScreen(
             Box(
                 modifier = Modifier
                     .background(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
+                        Brush.horizontalGradient(
+                            listOf(
                                 MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                                 MaterialTheme.colorScheme.secondary.copy(alpha = 0.05f)
                             )
@@ -72,14 +98,14 @@ fun DashboardScreen(
             ) {
                 Column {
                     Text(
-                        text = "Power User Hub",
+                        "Power User Hub",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "Advanced device optimization and policy manager.",
+                        "Privileged Android settings, package, component, and process control.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -87,120 +113,104 @@ fun DashboardScreen(
             }
         }
 
-        // Connection Status Section
-        Text(
-            text = "Service Status",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
+        Text("Privilege Provider", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             StatusCard(
-                title = "Shizuku",
+                title = if (plusDetected) "Shizuku+" else "Shizuku",
+                status = when {
+                    shizukuActive -> "Authorized"
+                    shizukuPresent -> "Permission needed"
+                    else -> "Not connected"
+                },
                 isActive = shizukuActive,
                 icon = Icons.Default.Security,
                 modifier = Modifier.weight(1f),
                 onClick = {
                     try {
-                        if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        if (Shizuku.pingBinder() &&
+                            Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED
+                        ) {
                             Shizuku.requestPermission(100)
                         }
-                    } catch (e: Exception) {
-                        // Shizuku app might not be installed
+                    } catch (_: Throwable) {
                     }
                 }
             )
             StatusCard(
-                title = "Root Access",
+                title = "Root",
+                status = if (rootActive) "Available" else "Not selected",
                 isActive = rootActive,
                 icon = Icons.Default.Android,
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // Active Backend Details
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text("Active execution identity", style = MaterialTheme.typography.labelSmall)
+                        Text(activeBackend, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (probeText.isNotBlank()) {
+                    HorizontalDivider()
                     Text(
-                        text = "Active Engine",
+                        probeText,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    )
-                    Text(
-                        text = activeBackend,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = if (shellService.isPrivilegedActive()) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
                 }
+                Text(
+                    "The actual server UID determines what Android will allow. Shizuku+ can provide additional bridges, but Power User Hub verifies the identity and command availability instead of assuming privileges from the app name.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
             }
         }
 
-        // Device Information
-        Text(
-            text = "Device Information",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-
+        Text("Device Information", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                InfoRow(label = "Model", value = "${Build.MANUFACTURER} ${Build.MODEL}")
-                InfoRow(label = "Android Version", value = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                InfoRow(label = "Build ID", value = Build.DISPLAY)
-                InfoRow(label = "Hardware", value = Build.HARDWARE)
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                InfoRow("Model", "${Build.MANUFACTURER} ${Build.MODEL}")
+                InfoRow("Android", "${Build.VERSION.RELEASE} · API ${Build.VERSION.SDK_INT}")
+                InfoRow("Build", Build.DISPLAY)
+                InfoRow("Hardware", Build.HARDWARE)
             }
         }
 
-        // Quick Navigation Grid
-        Text(
-            text = "Quick Tools",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-
+        Text("Quick Tools", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             NavigationButton(
-                title = "Settings Explorer",
-                subtitle = "Browse & edit Global, Secure, and System tables",
-                icon = Icons.Default.Settings,
-                onClick = onNavigateToSettings
+                "Settings Explorer",
+                "Enumerate and edit Global, Secure, and System tables",
+                Icons.Default.Settings,
+                onNavigateToSettings
             )
             NavigationButton(
-                title = "App Policy Manager",
-                subtitle = "Manage background, standby, and battery optimizations",
-                icon = Icons.Default.Apps,
-                onClick = onNavigateToApps
+                "App Explorer",
+                "Inspect installed packages and manifest components",
+                Icons.Default.Apps,
+                onNavigateToApps
             )
             NavigationButton(
-                title = "Active Enforced Locks",
-                subtitle = "View locked settings enforced in background",
-                icon = Icons.Default.Lock,
-                onClick = onNavigateToLocks
+                "Locked Settings",
+                "View settings that are being enforced",
+                Icons.Default.Lock,
+                onNavigateToLocks
             )
         }
     }
@@ -209,6 +219,7 @@ fun DashboardScreen(
 @Composable
 fun RowScope.StatusCard(
     title: String,
+    status: String,
     isActive: Boolean,
     icon: ImageVector,
     modifier: Modifier = Modifier,
@@ -220,28 +231,29 @@ fun RowScope.StatusCard(
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isActive) MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f) 
-                             else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = if (isActive)
+                MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f)
+            else
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
     ) {
         Column(
             modifier = Modifier
                 .padding(16.dp)
                 .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                imageVector = icon,
+                icon,
                 contentDescription = null,
                 tint = if (isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                 modifier = Modifier.size(32.dp)
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(text = title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(Modifier.height(8.dp))
+            Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.height(4.dp))
             Text(
-                text = if (isActive) "Connected" else "Not Running",
+                status,
                 color = if (isActive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 style = MaterialTheme.typography.labelSmall
             )
@@ -251,12 +263,9 @@ fun RowScope.StatusCard(
 
 @Composable
 fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(text = label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-        Text(text = value, fontWeight = FontWeight.Medium)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        Text(value, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -274,31 +283,18 @@ fun NavigationButton(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(modifier = Modifier.width(16.dp))
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+            Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+                Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    text = subtitle,
+                    subtitle,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
             }
-            Icon(
-                imageVector = Icons.Default.ArrowForward,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                modifier = Modifier.size(20.dp)
-            )
+            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(20.dp))
         }
     }
 }
