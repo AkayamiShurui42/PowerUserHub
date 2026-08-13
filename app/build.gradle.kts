@@ -32,6 +32,7 @@ android {
     }
     buildFeatures {
         compose = true
+        aidl = true
     }
 }
 
@@ -49,7 +50,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Shizuku
+    // Shizuku / Shizuku+ compatible binder backend
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
 
