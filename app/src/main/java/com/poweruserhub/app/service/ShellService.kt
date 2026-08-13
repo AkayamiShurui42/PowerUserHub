@@ -7,7 +7,7 @@ import java.util.Locale
 
 class ShellService(private val context: Context) {
 
-    private val shizukuExecutor = ShizukuExecutor()
+    private val shizukuExecutor = ShizukuExecutor(context)
     private val rootExecutor = RootExecutor()
     private val adbExecutor = AdbExecutor(context)
 
@@ -51,7 +51,8 @@ class ShellService(private val context: Context) {
         } else {
             "authorized"
         }
-        return if (plus) "Shizuku+ ($identity)" else "Shizuku ($identity)"
+        val transport = if (executor.getName().contains("UserService")) "UserService · " else ""
+        return if (plus) "Shizuku+ ($transport$identity)" else "Shizuku ($transport$identity)"
     }
 
     fun isShizukuPlusInstalled(): Boolean {
@@ -89,13 +90,6 @@ class ShellService(private val context: Context) {
         )
     }
 
-    /**
-     * WRITE_SECURE_SETTINGS is a development/signature permission; merely declaring it
-     * in AndroidManifest.xml does not grant it to a normal installed APK. Once Shizuku
-     * or root is authorized, use that privileged identity to grant the declared
-     * permission to Power User Hub itself. This makes direct SettingsProvider fallback
-     * and APIs that check the app UID work in addition to shell-backed operations.
-     */
     fun ensureAppPrivilegedPermissions(): CommandResult {
         val permission = android.Manifest.permission.WRITE_SECURE_SETTINGS
         if (context.checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -321,8 +315,6 @@ class ShellService(private val context: Context) {
         }.sortedBy { it.key.lowercase(Locale.ROOT) }
     }
 
-    // Component control -------------------------------------------------------
-
     fun startService(packageName: String, componentName: String, foreground: Boolean = false): CommandResult {
         val verb = if (foreground) "start-foreground-service" else "start-service"
         return executeCommand("am $verb --user current -n ${shellQuote(componentSpec(packageName, componentName))}")
@@ -347,10 +339,6 @@ class ShellService(private val context: Context) {
         val result = executeCommand("$command ${shellQuote(spec)}")
         if (!result.isSuccess) return result
 
-        // PackageManagerShellCommand performs setComponentEnabledSetting() and then
-        // immediately calls getComponentEnabledSetting() before printing "new state".
-        // Treat that shell output as the read-back rather than issuing a nonexistent
-        // secondary pm command.
         val expectedState = if (enabled) "enabled" else "disabled-user"
         return if (result.stdout.contains("new state: $expectedState", ignoreCase = true)) {
             CommandResult(0, result.stdout, "")
@@ -367,8 +355,6 @@ class ShellService(private val context: Context) {
         return "$packageName/$componentName"
     }
 
-    // Battery Optimization ---------------------------------------------------
-
     fun setBatteryExempted(packageName: String, exempt: Boolean): CommandResult {
         val flag = if (exempt) "+" else "-"
         return executeCommand("dumpsys deviceidle whitelist ${shellQuote(flag + packageName)}")
@@ -378,8 +364,6 @@ class ShellService(private val context: Context) {
         val result = executeCommand("dumpsys deviceidle whitelist")
         return result.isSuccess && result.stdout.contains(packageName)
     }
-
-    // App Standby Bucket -----------------------------------------------------
 
     fun setStandbyBucket(packageName: String, bucket: String): CommandResult {
         return executeCommand("am set-standby-bucket ${shellQuote(packageName)} ${shellQuote(bucket)}")
@@ -398,8 +382,6 @@ class ShellService(private val context: Context) {
         }
         return "unknown"
     }
-
-    // Background restrictions (AppOps) -------------------------------------
 
     fun setBackgroundRestricted(packageName: String, restricted: Boolean): CommandResult {
         val mode = if (restricted) "ignore" else "allow"
