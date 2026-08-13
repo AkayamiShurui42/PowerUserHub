@@ -1,47 +1,120 @@
 package com.poweruserhub.app.service
 
+import android.content.ComponentName
+import android.content.Context
+import android.content.ServiceConnection
+import android.os.IBinder
 import rikka.shizuku.Shizuku
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 /**
- * Command backend backed by the Shizuku binder.
+ * Privileged command backend for stock Shizuku and compatible Shizuku+ providers.
  *
- * Power User Hub intentionally executes through /system/bin/sh -c instead of trying
- * to spawn commands such as `settings`, `pm`, and `am` as standalone executables.
- * This gives the remote process the Android shell environment and also makes the
- * backend compatible with Shizuku+ transparent shell interception.
- *
- * Shizuku's legacy newProcess API is deprecated upstream in favour of UserService,
- * but it remains the broadest compatibility path for stock Shizuku and Shizuku+
- * while the app migrates privileged operations to typed binder services.
+ * Preferred path: a Shizuku UserService binder running under the server's actual UID.
+ * Compatibility path: legacy newProcess launching /system/bin/sh -c while the
+ * UserService is connecting or if a compatible provider does not expose UserService.
  */
-class ShizukuExecutor : CommandExecutor {
+class ShizukuExecutor(private val context: Context) : CommandExecutor {
 
-    override fun getName(): String = "Shizuku"
+    @Volatile
+    private var userService: IPrivilegedUserService? = null
+
+    @Volatile
+    private var bindRequested = false
+
+    private val userServiceArgs: Shizuku.UserServiceArgs by lazy {
+        Shizuku.UserServiceArgs(
+            ComponentName(context.packageName, PrivilegedUserService::class.java.name)
+        )
+            .daemon(false)
+            .processNameSuffix("privileged")
+            .debuggable(false)
+            .version(1)
+    }
+
+    private val userServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            userService = if (binder.pingBinder()) {
+                IPrivilegedUserService.Stub.asInterface(binder)
+            } else {
+                null
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            userService = null
+            bindRequested = false
+        }
+    }
+
+    override fun getName(): String = if (userService != null) "Shizuku UserService" else "Shizuku"
 
     override fun isAvailable(): Boolean {
-        return try {
+        val available = try {
             Shizuku.pingBinder() &&
                 Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED
         } catch (_: Throwable) {
             false
         }
+        if (available) ensureUserServiceBinding()
+        return available
     }
 
     override fun execute(command: String): CommandResult {
         if (!isAvailable()) {
-            return CommandResult(-1, "", "Shizuku service is not available or Power User Hub is not authorized.")
+            return CommandResult(
+                -1,
+                "",
+                "Shizuku service is not available or Power User Hub is not authorized."
+            )
         }
 
+        userService?.let { service ->
+            try {
+                val response = service.execute(command)
+                if (response != null && response.size >= 3) {
+                    return CommandResult(
+                        response[0].toIntOrNull() ?: -2,
+                        response[1] ?: "",
+                        response[2] ?: ""
+                    )
+                }
+            } catch (_: Throwable) {
+                userService = null
+                bindRequested = false
+                ensureUserServiceBinding()
+            }
+        }
+
+        // The first command after authorization can arrive before the asynchronous
+        // UserService callback. Execute it immediately through Shizuku's shell process
+        // rather than making the UI wait; later commands automatically use UserService.
+        return executeLegacyShell(command)
+    }
+
+    private fun ensureUserServiceBinding() {
+        if (userService != null || bindRequested) return
+        synchronized(this) {
+            if (userService != null || bindRequested) return
+            try {
+                if (Shizuku.getVersion() >= 10) {
+                    bindRequested = true
+                    Shizuku.bindUserService(userServiceArgs, userServiceConnection)
+                }
+            } catch (_: Throwable) {
+                bindRequested = false
+            }
+        }
+    }
+
+    private fun executeLegacyShell(command: String): CommandResult {
         var process: java.lang.Process? = null
         var outReader: BufferedReader? = null
         var errReader: BufferedReader? = null
 
         return try {
-            // Keep reflection for API/fork compatibility, but always launch a real Android shell.
-            // This fixes PATH/environment failures seen when invoking `settings` directly.
             val shellArgs = arrayOf("/system/bin/sh", "-c", command)
             val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
@@ -82,7 +155,11 @@ class ShizukuExecutor : CommandExecutor {
             val exited = process.waitFor(15, TimeUnit.SECONDS)
             if (!exited) {
                 process.destroyForcibly()
-                CommandResult(-3, stdoutBuilder.toString().trim(), "Execution timed out after 15 seconds")
+                CommandResult(
+                    -3,
+                    stdoutBuilder.toString().trim(),
+                    "Execution timed out after 15 seconds"
+                )
             } else {
                 outThread.join(2000)
                 errThread.join(2000)
