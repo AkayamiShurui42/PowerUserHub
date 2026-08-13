@@ -37,11 +37,10 @@ class MainActivity : ComponentActivity() {
         val shellService = ShellService(applicationContext)
         val dbHelper = LockDatabaseHelper(applicationContext)
 
-        // Schedule periodic background enforcement
         scheduleEnforcementWork()
 
         setContent {
-            PowerUserHubTheme(darkTheme = true, dynamicColor = false) { // Enforce premium dark slate theme
+            PowerUserHubTheme(darkTheme = true, dynamicColor = false) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -74,19 +73,19 @@ fun MainScreen(shellService: ShellService, dbHelper: LockDatabaseHelper) {
         Triple(Screen.Settings, Icons.Default.Settings, "Settings"),
         Triple(Screen.Apps, Icons.Default.Apps, "Apps"),
         Triple(Screen.Locks, Icons.Default.Lock, "Locks"),
-        Triple(Screen.Services, Icons.Default.PlayArrow, "Services"),
+        Triple(Screen.Services, Icons.Default.AccountTree, "Components"),
         Triple(Screen.Developer, Icons.Default.Build, "Dev Mode")
     )
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { 
+                title = {
                     Text(
-                        text = currentTitle, 
+                        text = currentTitle,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
-                    ) 
+                    )
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
