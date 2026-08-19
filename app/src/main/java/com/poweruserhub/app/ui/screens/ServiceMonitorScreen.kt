@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.poweruserhub.app.model.AppItem
 import com.poweruserhub.app.service.CommandResult
+import com.poweruserhub.app.service.CommunitySubmissionHelper
 import com.poweruserhub.app.service.ServiceKnowledge
 import com.poweruserhub.app.service.ServiceKnowledgeStore
 import com.poweruserhub.app.service.ServiceProtectionController
@@ -346,7 +347,6 @@ private fun ComponentList(
             key = { "${it.kind}:${it.packageName}/${it.componentName}" }
         ) { component ->
             val knowledge = if (component.kind == ComponentKind.SERVICE) {
-                // Read again when protectionGeneration changes so event history is reflected.
                 @Suppress("UNUSED_VARIABLE")
                 val generation = protectionGeneration
                 knowledgeStore.get(component.packageName, component.componentName)
@@ -387,8 +387,8 @@ private fun ComponentControlCard(
 
     fun runOperation(
         label: String,
-        block: () -> CommandResult,
-        onSuccess: (() -> Unit)? = null
+        onSuccess: (() -> Unit)? = null,
+        block: () -> CommandResult
     ) {
         if (busy) return
         busy = true
@@ -569,7 +569,7 @@ private fun ComponentControlCard(
                         enabled = !busy && protectionController.isAvailable(),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(if (protected) Icons.Default.Shield else Icons.Default.ShieldMoon, contentDescription = null)
+                        Icon(if (protected) Icons.Default.Lock else Icons.Default.LockOpen, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(if (protected) "Disable Keep Alive" else "Keep service alive with Shizuku+")
                     }
@@ -633,7 +633,7 @@ private fun ComponentControlCard(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "PowerHub keeps the raw component name, but this local terminology can later be submitted to the community knowledge database with device-specific observations.",
+                        "PowerHub keeps the raw component name. Local terminology and observed behavior can be submitted to the moderated community database with this device's build metadata.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -651,6 +651,37 @@ private fun ComponentControlCard(
                         minLines = 3,
                         maxLines = 6
                     )
+                    OutlinedButton(
+                        onClick = {
+                            knowledgeStore.setCustomMetadata(
+                                component.packageName,
+                                component.componentName,
+                                label,
+                                description
+                            )
+                            val record = knowledgeStore.buildCommunityRecord(
+                                component.packageName,
+                                component.componentName
+                            )
+                            val result = CommunitySubmissionHelper.openSubmission(
+                                context,
+                                "$label · ${component.packageName}",
+                                record
+                            )
+                            if (result.isFailure) {
+                                Toast.makeText(
+                                    context,
+                                    "Could not open community submission: ${result.exceptionOrNull()?.message}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Public, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Submit learned finding to community")
+                    }
                 }
             },
             confirmButton = {
