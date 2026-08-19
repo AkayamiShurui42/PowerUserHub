@@ -22,35 +22,46 @@ data class SettingKnowledge(
     val acceptedValues: List<String>,
     val rejectedValues: List<String>,
     val correlations: List<SettingCorrelation>,
-    val lastResult: String
+    val lastResult: String,
+    val communityKnown: Boolean = false
 ) {
     val confidenceLabel: String
         get() = when {
             correlations.any { it.observations >= 3 } -> "Probable"
             acceptedValues.size >= 2 || correlations.isNotEmpty() -> "Observed"
+            communityKnown -> "Community"
             else -> "Unknown"
         }
 }
 
 /**
- * Device-local knowledge base for SettingsProvider variables.
- *
- * It records values Android accepted/rejected and side effects observed in the surrounding
- * SettingsProvider tables. This is evidence, not proof of causation, so correlations are
- * stored with repeat counts instead of being silently promoted into facts.
+ * Device-local knowledge base for SettingsProvider variables, merged with the moderated
+ * community catalog cached by CommunityKnowledgeClient.
  */
 class SettingKnowledgeStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("setting_knowledge_v1", Context.MODE_PRIVATE)
+    private val community = CommunityKnowledgeClient(appContext)
 
     fun get(namespace: String, key: String): SettingKnowledge {
         val id = id(namespace, key)
-        val accepted = readStringSet("$id:accepted")
-        val rejected = readStringSet("$id:rejected")
-        val correlations = readCorrelations(id)
-        val name = prefs.getString("$id:label", null)?.takeIf { it.isNotBlank() } ?: inferDisplayName(key)
+        val shared = community.findSetting(namespace, key)
+        val accepted = readStringSet("$id:accepted").toMutableSet().apply {
+            addAll(readJsonStrings(shared?.optJSONArray("acceptedValues")))
+        }
+        val rejected = readStringSet("$id:rejected").toMutableSet().apply {
+            addAll(readJsonStrings(shared?.optJSONArray("rejectedValues")))
+        }
+        val correlations = mergeForDisplay(readCorrelations(id), readSharedCorrelations(shared))
+        val sharedName = shared?.optString("displayName")?.takeIf { it.isNotBlank() }
+        val sharedDescription = shared?.optString("description")?.takeIf { it.isNotBlank() }
+        val name = prefs.getString("$id:label", null)?.takeIf { it.isNotBlank() }
+            ?: sharedName
+            ?: inferDisplayName(key)
         val customDescription = prefs.getString("$id:description", null)?.takeIf { it.isNotBlank() }
-        val description = customDescription ?: inferDescription(key, correlations)
+        val description = customDescription
+            ?: sharedDescription
+            ?: inferDescription(key, correlations)
         return SettingKnowledge(
             namespace = namespace,
             key = key,
@@ -59,7 +70,8 @@ class SettingKnowledgeStore(context: Context) {
             acceptedValues = accepted.sorted(),
             rejectedValues = rejected.sorted(),
             correlations = correlations.sortedByDescending { it.observations },
-            lastResult = prefs.getString("$id:last_result", "") ?: ""
+            lastResult = prefs.getString("$id:last_result", "") ?: "",
+            communityKnown = shared != null
         )
     }
 
@@ -177,22 +189,54 @@ class SettingKnowledgeStore(context: Context) {
         val raw = prefs.getString("$id:correlations", null) ?: return emptyList()
         return try {
             val array = JSONArray(raw)
-            buildList {
-                for (i in 0 until array.length()) {
-                    val item = array.optJSONObject(i) ?: continue
-                    add(
-                        SettingCorrelation(
-                            namespace = item.optString("namespace"),
-                            key = item.optString("key"),
-                            before = item.optString("before"),
-                            after = item.optString("after"),
-                            observations = item.optInt("observations", 1)
-                        )
-                    )
-                }
-            }
+            parseCorrelationArray(array)
         } catch (_: Throwable) {
             emptyList()
+        }
+    }
+
+    private fun readSharedCorrelations(shared: JSONObject?): List<SettingCorrelation> {
+        return parseCorrelationArray(shared?.optJSONArray("correlations") ?: return emptyList())
+    }
+
+    private fun parseCorrelationArray(array: JSONArray): List<SettingCorrelation> {
+        return buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                add(
+                    SettingCorrelation(
+                        namespace = item.optString("namespace"),
+                        key = item.optString("key"),
+                        before = item.optString("before"),
+                        after = item.optString("after"),
+                        observations = item.optInt("observations", 1)
+                    )
+                )
+            }
+        }
+    }
+
+    private fun mergeForDisplay(
+        local: List<SettingCorrelation>,
+        shared: List<SettingCorrelation>
+    ): List<SettingCorrelation> {
+        val merged = linkedMapOf<String, SettingCorrelation>()
+        (shared + local).forEach { candidate ->
+            val key = correlationId(candidate)
+            val old = merged[key]
+            merged[key] = if (old == null) candidate else old.copy(
+                observations = maxOf(old.observations, candidate.observations)
+            )
+        }
+        return merged.values.toList()
+    }
+
+    private fun readJsonStrings(array: JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return buildList {
+            for (i in 0 until array.length()) {
+                array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+            }
         }
     }
 
