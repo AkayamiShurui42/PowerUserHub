@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Privileged command backend for stock Shizuku and compatible Shizuku+ providers.
  *
- * Preferred path: a Shizuku UserService binder running under the server's actual UID.
+ * Preferred path: a daemon Shizuku UserService binder running under the server's actual UID.
  * Compatibility path: legacy newProcess launching /system/bin/sh -c while the
  * UserService is connecting or if a compatible provider does not expose UserService.
  */
@@ -28,10 +28,11 @@ class ShizukuExecutor(private val context: Context) : CommandExecutor {
         Shizuku.UserServiceArgs(
             ComponentName(context.packageName, PrivilegedUserService::class.java.name)
         )
-            .daemon(false)
+            // The keep-alive watchdog must not die merely because Android reclaims the UI app.
+            .daemon(true)
             .processNameSuffix("privileged")
             .debuggable(false)
-            .version(1)
+            .version(2)
     }
 
     private val userServiceConnection = object : ServiceConnection {
@@ -73,14 +74,7 @@ class ShizukuExecutor(private val context: Context) : CommandExecutor {
 
         userService?.let { service ->
             try {
-                val response = service.execute(command)
-                if (response != null && response.size >= 3) {
-                    return CommandResult(
-                        response[0].toIntOrNull() ?: -2,
-                        response[1] ?: "",
-                        response[2] ?: ""
-                    )
-                }
+                return commandResult(service.execute(command))
             } catch (_: Throwable) {
                 userService = null
                 bindRequested = false
@@ -92,6 +86,64 @@ class ShizukuExecutor(private val context: Context) : CommandExecutor {
         // UserService callback. Execute it immediately through Shizuku's shell process
         // rather than making the UI wait; later commands automatically use UserService.
         return executeLegacyShell(command)
+    }
+
+    fun setProtectedService(packageName: String, componentName: String, enabled: Boolean): CommandResult {
+        if (!isAvailable()) {
+            return CommandResult(-1, "", "Shizuku+ is not available or Power User Hub is not authorized.")
+        }
+        val service = awaitUserService()
+            ?: return CommandResult(-7, "", "Privileged UserService did not become ready. Try again after Shizuku+ connects.")
+        return try {
+            commandResult(service.setProtectedService(packageName, componentName, enabled))
+        } catch (t: Throwable) {
+            userService = null
+            bindRequested = false
+            CommandResult(-8, "", "Service protection binder failed: ${t.message ?: t.javaClass.simpleName}")
+        }
+    }
+
+    fun isProtectedService(packageName: String, componentName: String): Boolean {
+        val service = awaitUserService(700) ?: return false
+        return try {
+            service.isProtectedService(packageName, componentName)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun getProtectedServices(): Set<String> {
+        val service = awaitUserService(700) ?: return emptySet()
+        return try {
+            service.protectedServices?.toSet() ?: emptySet()
+        } catch (_: Throwable) {
+            emptySet()
+        }
+    }
+
+    fun drainProtectionEvents(): List<String> {
+        val service = awaitUserService(700) ?: return emptyList()
+        return try {
+            service.drainProtectionEvents()?.toList() ?: emptyList()
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    private fun awaitUserService(timeoutMs: Long = 2_000): IPrivilegedUserService? {
+        userService?.let { return it }
+        ensureUserServiceBinding()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            userService?.let { return it }
+            try {
+                Thread.sleep(40)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return null
+            }
+        }
+        return userService
     }
 
     private fun ensureUserServiceBinding() {
@@ -107,6 +159,17 @@ class ShizukuExecutor(private val context: Context) : CommandExecutor {
                 bindRequested = false
             }
         }
+    }
+
+    private fun commandResult(response: Array<String>?): CommandResult {
+        if (response == null || response.size < 3) {
+            return CommandResult(-2, "", "Privileged service returned an invalid response.")
+        }
+        return CommandResult(
+            response[0].toIntOrNull() ?: -2,
+            response[1],
+            response[2]
+        )
     }
 
     private fun executeLegacyShell(command: String): CommandResult {
