@@ -154,6 +154,7 @@ class ServiceKnowledgeStore(context: Context) {
         val knowledge = get(packageName, componentName)
         return JSONObject()
             .put("schema", 1)
+            .put("kind", "service")
             .put("package", packageName)
             .put("component", componentName)
             .put("displayName", knowledge.displayName)
