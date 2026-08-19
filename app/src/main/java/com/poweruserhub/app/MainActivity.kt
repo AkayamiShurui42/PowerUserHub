@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -21,12 +22,15 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.poweruserhub.app.service.CommunityKnowledgeClient
 import com.poweruserhub.app.service.LockDatabaseHelper
 import com.poweruserhub.app.service.ShellService
 import com.poweruserhub.app.ui.Screen
 import com.poweruserhub.app.ui.screens.*
 import com.poweruserhub.app.ui.theme.PowerUserHubTheme
 import com.poweruserhub.app.worker.LockEnforcementWorker
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +42,7 @@ class MainActivity : ComponentActivity() {
         val dbHelper = LockDatabaseHelper(applicationContext)
 
         scheduleEnforcementWork()
+        refreshCommunityCatalog()
 
         setContent {
             PowerUserHubTheme(darkTheme = true, dynamicColor = false) {
@@ -59,6 +64,12 @@ class MainActivity : ComponentActivity() {
             ExistingPeriodicWorkPolicy.KEEP,
             workRequest
         )
+    }
+
+    private fun refreshCommunityCatalog() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            CommunityKnowledgeClient(applicationContext).refresh()
+        }
     }
 }
 
