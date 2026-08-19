@@ -18,13 +18,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.poweruserhub.app.model.SettingItem
 import com.poweruserhub.app.model.SettingLock
+import com.poweruserhub.app.service.CommunitySubmissionHelper
 import com.poweruserhub.app.service.LockDatabaseHelper
 import com.poweruserhub.app.service.SettingKnowledge
 import com.poweruserhub.app.service.SettingKnowledgeStore
 import com.poweruserhub.app.service.SettingObservationEngine
 import com.poweruserhub.app.service.ShellService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -508,6 +508,10 @@ fun SettingActionSheetContent(
             title = { Text("Teach setting terminology") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "PowerHub keeps the raw Android key. Your terminology, accepted/rejected values, correlations, and device/build metadata can be submitted to the moderated community database.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = label,
                         onValueChange = { label = it },
@@ -523,6 +527,29 @@ fun SettingActionSheetContent(
                         minLines = 3,
                         maxLines = 6
                     )
+                    OutlinedButton(
+                        onClick = {
+                            knowledgeStore.setCustomMetadata(setting.namespace, setting.key, label, description)
+                            val record = knowledgeStore.buildCommunityRecord(setting.namespace, setting.key)
+                            val result = CommunitySubmissionHelper.openSubmission(
+                                context,
+                                "$label · ${setting.namespace}.${setting.key}",
+                                record
+                            )
+                            if (result.isFailure) {
+                                Toast.makeText(
+                                    context,
+                                    "Could not open community submission: ${result.exceptionOrNull()?.message}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Public, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Submit learned finding to community")
+                    }
                 }
             },
             confirmButton = {
