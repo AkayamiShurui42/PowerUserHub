@@ -21,6 +21,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.poweruserhub.app.model.AppItem
 import com.poweruserhub.app.service.CommandResult
+import com.poweruserhub.app.service.ServiceKnowledge
+import com.poweruserhub.app.service.ServiceKnowledgeStore
+import com.poweruserhub.app.service.ServiceProtectionController
 import com.poweruserhub.app.service.ShellService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,6 +47,8 @@ private data class DeclaredComponent(
 fun ServiceMonitorScreen(shellService: ShellService) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val knowledgeStore = remember { ServiceKnowledgeStore(context) }
+    val protectionController = remember { ServiceProtectionController(context) }
 
     var selectedTab by remember { mutableIntStateOf(1) }
     var searchQuery by remember { mutableStateOf("") }
@@ -52,30 +57,56 @@ fun ServiceMonitorScreen(shellService: ShellService) {
     var receivers by remember { mutableStateOf<List<DeclaredComponent>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var backendName by remember { mutableStateOf("Detecting…") }
+    var protectionGeneration by remember { mutableIntStateOf(0) }
+    var protectionDiagnostic by remember { mutableStateOf("") }
 
-    fun refreshAll() {
+    fun refreshAll(rehydrateProtection: Boolean = false) {
         isLoading = true
         coroutineScope.launch {
             val scan = withContext(Dispatchers.IO) {
                 shellService.invalidateBackendCache()
                 val components = scanDeclaredComponents(context)
                 val running = scanRunningProcesses(context, shellService)
+
+                if (protectionController.isAvailable()) {
+                    if (rehydrateProtection) {
+                        val wanted = knowledgeStore.getProtectedSpecs()
+                        if (wanted.isNotEmpty()) {
+                            protectionController.restoreProtection(wanted)
+                        }
+                    }
+                    knowledgeStore.applyWatchdogEvents(protectionController.drainEvents())
+                }
+
                 Triple(components.first, components.second, running)
             }
             services = scan.first
             receivers = scan.second
             runningApps = scan.third
             backendName = withContext(Dispatchers.IO) { shellService.getActiveBackendName() }
+            protectionDiagnostic = when {
+                protectionController.isAvailable() -> "Shizuku+ daemon protection ready"
+                protectionController.isShizukuPlusInstalled() -> "Shizuku+ installed but not authorized/connected"
+                else -> "Shizuku+ required for Keep Alive"
+            }
+            protectionGeneration++
             isLoading = false
         }
     }
 
     LaunchedEffect(Unit) {
-        refreshAll()
+        refreshAll(rehydrateProtection = true)
     }
 
-    val filteredServices = remember(services, searchQuery) {
-        services.filter { it.matches(searchQuery) }
+    val filteredServices = remember(services, searchQuery, protectionGeneration) {
+        services.filter { component ->
+            if (component.matches(searchQuery)) return@filter true
+            if (searchQuery.isBlank()) return@filter true
+            val knowledge = knowledgeStore.get(component.packageName, component.componentName)
+            knowledge.displayName.contains(searchQuery, true) ||
+                knowledge.description.contains(searchQuery, true) ||
+                knowledge.confidence.label.contains(searchQuery, true)
+        }
     }
     val filteredReceivers = remember(receivers, searchQuery) {
         receivers.filter { it.matches(searchQuery) }
@@ -101,6 +132,14 @@ fun ServiceMonitorScreen(shellService: ShellService) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
+                Text(
+                    protectionDiagnostic,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (protectionController.isAvailable())
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                )
             }
             IconButton(onClick = { refreshAll() }, enabled = !isLoading) {
                 Icon(Icons.Default.Refresh, contentDescription = "Rescan components")
@@ -119,7 +158,7 @@ fun ServiceMonitorScreen(shellService: ShellService) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            placeholder = { Text("Search app, package, or component…") },
+            placeholder = { Text("Search name, purpose, app, package, or component…") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
@@ -141,9 +180,9 @@ fun ServiceMonitorScreen(shellService: ShellService) {
             ) {
                 Text(
                     text = if (selectedTab == 1)
-                        "Declared Android services are enumerated directly from every visible package manifest. Start/stop and component enable/disable actions are executed through the active privileged backend."
+                        "Services are shown with human-readable terminology while the raw Android component remains visible. PowerHub learns from starts, stops, disappearances, and watchdog restores. Keep Alive uses the persistent Shizuku+ UserService and re-applies background protections when a protected service disappears."
                     else
-                        "These are declared broadcast receiver endpoints. Send performs an explicit broadcast; enter an action when the receiver expects one. Protected/non-exported receivers can still reject shell requests depending on the active UID.",
+                        "These are declared broadcast receiver endpoints. Send performs an explicit broadcast; enter an action when the receiver expects one. Protected/non-exported receivers can still reject privileged requests depending on the active UID.",
                     modifier = Modifier.padding(12.dp),
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -160,8 +199,24 @@ fun ServiceMonitorScreen(shellService: ShellService) {
 
         when (selectedTab) {
             0 -> RunningProcessList(filteredRunning)
-            1 -> ComponentList(filteredServices, shellService)
-            else -> ComponentList(filteredReceivers, shellService)
+            1 -> ComponentList(
+                components = filteredServices,
+                shellService = shellService,
+                knowledgeStore = knowledgeStore,
+                protectionController = protectionController,
+                protectionGeneration = protectionGeneration,
+                onProtectionChanged = {
+                    protectionGeneration++
+                }
+            )
+            else -> ComponentList(
+                components = filteredReceivers,
+                shellService = shellService,
+                knowledgeStore = knowledgeStore,
+                protectionController = protectionController,
+                protectionGeneration = protectionGeneration,
+                onProtectionChanged = {}
+            )
         }
     }
 }
@@ -273,7 +328,14 @@ private fun RunningProcessList(apps: List<AppItem>) {
 }
 
 @Composable
-private fun ComponentList(components: List<DeclaredComponent>, shellService: ShellService) {
+private fun ComponentList(
+    components: List<DeclaredComponent>,
+    shellService: ShellService,
+    knowledgeStore: ServiceKnowledgeStore,
+    protectionController: ServiceProtectionController,
+    protectionGeneration: Int,
+    onProtectionChanged: () -> Unit
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -283,7 +345,20 @@ private fun ComponentList(components: List<DeclaredComponent>, shellService: She
             items = components,
             key = { "${it.kind}:${it.packageName}/${it.componentName}" }
         ) { component ->
-            ComponentControlCard(component, shellService)
+            val knowledge = if (component.kind == ComponentKind.SERVICE) {
+                // Read again when protectionGeneration changes so event history is reflected.
+                @Suppress("UNUSED_VARIABLE")
+                val generation = protectionGeneration
+                knowledgeStore.get(component.packageName, component.componentName)
+            } else null
+            ComponentControlCard(
+                component = component,
+                shellService = shellService,
+                knowledgeStore = knowledgeStore,
+                protectionController = protectionController,
+                knowledge = knowledge,
+                onProtectionChanged = onProtectionChanged
+            )
         }
         if (components.isEmpty()) {
             item { EmptyComponentMessage("No matching declared components were found.") }
@@ -292,20 +367,36 @@ private fun ComponentList(components: List<DeclaredComponent>, shellService: She
 }
 
 @Composable
-private fun ComponentControlCard(component: DeclaredComponent, shellService: ShellService) {
+private fun ComponentControlCard(
+    component: DeclaredComponent,
+    shellService: ShellService,
+    knowledgeStore: ServiceKnowledgeStore,
+    protectionController: ServiceProtectionController,
+    knowledge: ServiceKnowledge?,
+    onProtectionChanged: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var action by remember(component.packageName, component.componentName) { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var protected by remember(component.packageName, component.componentName, knowledge?.protected) {
+        mutableStateOf(knowledge?.protected == true)
+    }
+    var showTeachDialog by remember { mutableStateOf(false) }
 
-    fun runOperation(label: String, block: () -> CommandResult) {
+    fun runOperation(
+        label: String,
+        block: () -> CommandResult,
+        onSuccess: (() -> Unit)? = null
+    ) {
         if (busy) return
         busy = true
         scope.launch {
             val result = withContext(Dispatchers.IO) { block() }
             busy = false
             val message = if (result.isSuccess) {
+                onSuccess?.invoke()
                 "$label succeeded${result.stdout.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""}"
             } else {
                 "$label failed (${result.exitCode}): ${result.stderr.ifBlank { result.stdout.ifBlank { "No output" } }}"
@@ -332,9 +423,29 @@ private fun ComponentControlCard(component: DeclaredComponent, shellService: She
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(component.appName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                    Text(component.componentName, style = MaterialTheme.typography.labelSmall, maxLines = 2)
-                    Text(component.packageName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                    if (knowledge != null) {
+                        Text(knowledge.displayName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        Text(component.appName, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            knowledge.description,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                            maxLines = if (expanded) 6 else 2
+                        )
+                    } else {
+                        Text(component.appName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(
+                        component.componentName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        maxLines = 2
+                    )
+                    Text(
+                        component.packageName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    )
                 }
                 IconButton(onClick = { expanded = !expanded }) {
                     Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
@@ -345,6 +456,24 @@ private fun ComponentControlCard(component: DeclaredComponent, shellService: She
                 ComponentBadge(if (component.enabled) "Enabled" else "Disabled")
                 ComponentBadge(if (component.exported) "Exported" else "Private")
                 component.permission?.takeIf { it.isNotBlank() }?.let { ComponentBadge("Permission") }
+                knowledge?.let { ComponentBadge(it.confidence.label) }
+                if (protected) ComponentBadge("Keep Alive")
+            }
+
+            if (knowledge != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    knowledge.observationSummary(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f)
+                )
+                knowledge.lastEvent.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        "Last learned event: $it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f)
+                    )
+                }
             }
 
             if (expanded) {
@@ -373,18 +502,28 @@ private fun ComponentControlCard(component: DeclaredComponent, shellService: She
                     if (component.kind == ComponentKind.SERVICE) {
                         Button(
                             onClick = {
-                                runOperation("Start service") {
-                                    shellService.startService(component.packageName, component.componentName)
-                                }
+                                runOperation(
+                                    label = "Start service",
+                                    block = { shellService.startService(component.packageName, component.componentName) },
+                                    onSuccess = {
+                                        knowledgeStore.recordManualStart(component.packageName, component.componentName)
+                                        onProtectionChanged()
+                                    }
+                                )
                             },
                             enabled = !busy && shellService.isPrivilegedActive(),
                             modifier = Modifier.weight(1f)
                         ) { Text("Start") }
                         OutlinedButton(
                             onClick = {
-                                runOperation("Stop service") {
-                                    shellService.stopService(component.packageName, component.componentName)
-                                }
+                                runOperation(
+                                    label = "Stop service",
+                                    block = { shellService.stopService(component.packageName, component.componentName) },
+                                    onSuccess = {
+                                        knowledgeStore.recordManualStop(component.packageName, component.componentName)
+                                        onProtectionChanged()
+                                    }
+                                )
                             },
                             enabled = !busy && shellService.isPrivilegedActive(),
                             modifier = Modifier.weight(1f)
@@ -403,6 +542,58 @@ private fun ComponentControlCard(component: DeclaredComponent, shellService: She
                             enabled = !busy && shellService.isPrivilegedActive(),
                             modifier = Modifier.weight(1f)
                         ) { Text("Send") }
+                    }
+                }
+
+                if (component.kind == ComponentKind.SERVICE) {
+                    Spacer(Modifier.height(8.dp))
+                    FilledTonalButton(
+                        onClick = {
+                            val newState = !protected
+                            runOperation(
+                                label = if (newState) "Enable Keep Alive" else "Disable Keep Alive",
+                                block = {
+                                    protectionController.protect(
+                                        component.packageName,
+                                        component.componentName,
+                                        newState
+                                    )
+                                },
+                                onSuccess = {
+                                    protected = newState
+                                    knowledgeStore.setProtected(component.packageName, component.componentName, newState)
+                                    onProtectionChanged()
+                                }
+                            )
+                        },
+                        enabled = !busy && protectionController.isAvailable(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(if (protected) Icons.Default.Shield else Icons.Default.ShieldMoon, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (protected) "Disable Keep Alive" else "Keep service alive with Shizuku+")
+                    }
+
+                    if (!protectionController.isAvailable()) {
+                        Text(
+                            text = if (protectionController.isShizukuPlusInstalled())
+                                "Keep Alive is unavailable until Shizuku+ is connected and Power User Hub is authorized."
+                            else
+                                "Keep Alive intentionally requires Shizuku+ so the watchdog can live in a daemon privileged UserService.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.58f),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showTeachDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.EditNote, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Teach PowerHub what this service does")
                     }
                 }
 
@@ -426,6 +617,60 @@ private fun ComponentControlCard(component: DeclaredComponent, shellService: She
                 }
             }
         }
+    }
+
+    if (showTeachDialog && component.kind == ComponentKind.SERVICE) {
+        val existing = knowledgeStore.get(component.packageName, component.componentName)
+        var label by remember(component.packageName, component.componentName, showTeachDialog) {
+            mutableStateOf(existing.displayName)
+        }
+        var description by remember(component.packageName, component.componentName, showTeachDialog) {
+            mutableStateOf(existing.description)
+        }
+        AlertDialog(
+            onDismissRequest = { showTeachDialog = false },
+            title = { Text("Teach service terminology") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "PowerHub keeps the raw component name, but this local terminology can later be submitted to the community knowledge database with device-specific observations.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { label = it },
+                        label = { Text("Human-readable name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("What this service does") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 6
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        knowledgeStore.setCustomMetadata(
+                            component.packageName,
+                            component.componentName,
+                            label,
+                            description
+                        )
+                        showTeachDialog = false
+                        onProtectionChanged()
+                    }
+                ) { Text("Save learning") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTeachDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
