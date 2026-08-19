@@ -108,8 +108,12 @@ class SettingKnowledgeStore(context: Context) {
 
     fun buildCommunityRecord(namespace: String, key: String): JSONObject {
         val knowledge = get(namespace, key)
-        val accepted = JSONArray().apply { knowledge.acceptedValues.forEach(::put) }
-        val rejected = JSONArray().apply { knowledge.rejectedValues.forEach(::put) }
+        val accepted = JSONArray().apply {
+            knowledge.acceptedValues.forEach { value -> put(value) }
+        }
+        val rejected = JSONArray().apply {
+            knowledge.rejectedValues.forEach { value -> put(value) }
+        }
         val correlations = JSONArray().apply {
             knowledge.correlations.forEach { c ->
                 put(
