@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AkayamiShurui42/PowerUserHub/community/schema-v1.json",
+  "title": "Power User Hub community finding",
+  "type": "object",
+  "required": ["schema", "kind"],
+  "properties": {
+    "schema": { "const": 1 },
+    "kind": { "enum": ["setting", "service"] },
+    "namespace": { "type": "string" },
+    "key": { "type": "string" },
+    "package": { "type": "string" },
+    "component": { "type": "string" },
+    "displayName": { "type": "string" },
+    "description": { "type": "string" },
+    "confidence": { "type": "string" },
+    "acceptedValues": { "type": "array", "items": { "type": "string" } },
+    "rejectedValues": { "type": "array", "items": { "type": "string" } },
+    "correlations": { "type": "array", "items": { "type": "object" } },
+    "manufacturer": { "type": "string" },
+    "model": { "type": "string" },
+    "sdk": { "type": "integer" },
+    "release": { "type": "string" },
+    "fingerprint": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "setting" } } },
+      "then": { "required": ["namespace", "key", "displayName", "description"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "service" } } },
+      "then": { "required": ["package", "component", "displayName", "description"] }
+    }
+  ]
+}
