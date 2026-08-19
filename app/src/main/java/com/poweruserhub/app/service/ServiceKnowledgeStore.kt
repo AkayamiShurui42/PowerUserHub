@@ -8,6 +8,7 @@ import java.util.Locale
 enum class ServiceKnowledgeConfidence(val label: String) {
     UNKNOWN("Unknown"),
     INFERRED("Inferred"),
+    COMMUNITY("Community"),
     OBSERVED("Observed"),
     USER_DEFINED("User defined")
 }
@@ -39,15 +40,15 @@ data class ServiceKnowledge(
 }
 
 /**
- * Local, device-specific service knowledge base.
+ * Device-specific service knowledge merged with the moderated shared catalog.
  *
- * Raw component names are never hidden. This layer adds human terminology and records
- * observed behavior so a future community backend can submit reproducible findings instead
- * of anonymous guesses about what a service might do.
+ * Priority is user terminology > local observed behavior > community terminology > name inference.
+ * Raw Android component names are always retained by the UI.
  */
 class ServiceKnowledgeStore(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("service_knowledge_v1", Context.MODE_PRIVATE)
+    private val community = CommunityKnowledgeClient(appContext)
 
     fun get(packageName: String, componentName: String): ServiceKnowledge {
         val id = id(packageName, componentName)
@@ -61,11 +62,17 @@ class ServiceKnowledgeStore(context: Context) {
         val lastEvent = prefs.getString("$id:last_event", "") ?: ""
         val protected = prefs.getBoolean("$id:protected", false)
 
+        val shared = community.findService(packageName, componentName)
+        val sharedName = shared?.optString("displayName")?.takeIf { it.isNotBlank() }.orEmpty()
+        val sharedDescription = shared?.optString("description")?.takeIf { it.isNotBlank() }.orEmpty()
         val inferredName = inferDisplayName(componentName)
         val inferredDescription = inferDescription(inferredName)
+        val localObservationCount = manualStarts + manualStops + autoRestarts + disappearances + protectionEnables
+
         val confidence = when {
             customLabel.isNotEmpty() || customDescription.isNotEmpty() -> ServiceKnowledgeConfidence.USER_DEFINED
-            manualStarts + manualStops + autoRestarts + disappearances + protectionEnables > 0 -> ServiceKnowledgeConfidence.OBSERVED
+            localObservationCount > 0 -> ServiceKnowledgeConfidence.OBSERVED
+            shared != null -> ServiceKnowledgeConfidence.COMMUNITY
             inferredDescription != GENERIC_DESCRIPTION -> ServiceKnowledgeConfidence.INFERRED
             else -> ServiceKnowledgeConfidence.UNKNOWN
         }
@@ -73,8 +80,8 @@ class ServiceKnowledgeStore(context: Context) {
         return ServiceKnowledge(
             packageName = packageName,
             componentName = componentName,
-            displayName = customLabel.ifEmpty { inferredName },
-            description = customDescription.ifEmpty { inferredDescription },
+            displayName = customLabel.ifEmpty { sharedName.ifEmpty { inferredName } },
+            description = customDescription.ifEmpty { sharedDescription.ifEmpty { inferredDescription } },
             confidence = confidence,
             manualStarts = manualStarts,
             manualStops = manualStops,
@@ -120,10 +127,6 @@ class ServiceKnowledgeStore(context: Context) {
         }.toSet()
     }
 
-    /**
-     * Consumes tab-delimited events emitted by the privileged daemon.
-     * Format: timestamp, type, package, component, details.
-     */
     fun applyWatchdogEvents(events: List<String>): Int {
         var applied = 0
         events.forEach { row ->
@@ -149,7 +152,6 @@ class ServiceKnowledgeStore(context: Context) {
         return applied
     }
 
-    /** Community-ready record; transport and moderation are intentionally separate. */
     fun buildCommunityRecord(packageName: String, componentName: String): JSONObject {
         val knowledge = get(packageName, componentName)
         return JSONObject()
