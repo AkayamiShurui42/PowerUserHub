@@ -19,8 +19,12 @@ import androidx.compose.ui.unit.sp
 import com.poweruserhub.app.model.SettingItem
 import com.poweruserhub.app.model.SettingLock
 import com.poweruserhub.app.service.LockDatabaseHelper
+import com.poweruserhub.app.service.SettingKnowledge
+import com.poweruserhub.app.service.SettingKnowledgeStore
+import com.poweruserhub.app.service.SettingObservationEngine
 import com.poweruserhub.app.service.ShellService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -35,6 +39,7 @@ fun SettingsExplorerScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val knowledgeStore = remember { SettingKnowledgeStore(context) }
 
     var selectedNamespace by remember { mutableStateOf("GLOBAL") }
     var searchQuery by remember { mutableStateOf("") }
@@ -43,6 +48,7 @@ fun SettingsExplorerScreen(
     var isLoading by remember { mutableStateOf(false) }
     var activeSettingForSheet by remember { mutableStateOf<SettingItem?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
+    var knowledgeGeneration by remember { mutableIntStateOf(0) }
 
     fun refreshSettings() {
         isLoading = true
@@ -61,10 +67,16 @@ fun SettingsExplorerScreen(
         refreshSettings()
     }
 
-    val filteredSettings = remember(settingsList, searchQuery) {
-        settingsList.filter {
-            it.key.contains(searchQuery, ignoreCase = true) ||
-                it.value.contains(searchQuery, ignoreCase = true)
+    val filteredSettings = remember(settingsList, searchQuery, knowledgeGeneration) {
+        settingsList.filter { item ->
+            if (item.key.contains(searchQuery, ignoreCase = true) ||
+                item.value.contains(searchQuery, ignoreCase = true)
+            ) return@filter true
+            if (searchQuery.isBlank()) return@filter true
+            val knowledge = knowledgeStore.get(item.namespace, item.key)
+            knowledge.displayName.contains(searchQuery, true) ||
+                knowledge.description.contains(searchQuery, true) ||
+                knowledge.acceptedValues.any { it.contains(searchQuery, true) }
         }
     }
 
@@ -88,7 +100,7 @@ fun SettingsExplorerScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search settings...") },
+            placeholder = { Text("Search name, purpose, key, or value…") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
                 Row {
@@ -158,8 +170,10 @@ fun SettingsExplorerScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(filteredSettings, key = { "${it.namespace}_${it.key}" }) { item ->
+                    val knowledge = knowledgeStore.get(item.namespace, item.key)
                     SettingCard(
                         item = item,
+                        knowledge = knowledge,
                         onClick = {
                             activeSettingForSheet = item
                             showBottomSheet = true
@@ -199,6 +213,8 @@ fun SettingsExplorerScreen(
                 setting = setting,
                 shellService = shellService,
                 dbHelper = dbHelper,
+                knowledgeStore = knowledgeStore,
+                onKnowledgeChanged = { knowledgeGeneration++ },
                 onDismiss = {
                     showBottomSheet = false
                     refreshSettings()
@@ -209,7 +225,7 @@ fun SettingsExplorerScreen(
 }
 
 @Composable
-fun SettingCard(item: SettingItem, onClick: () -> Unit) {
+fun SettingCard(item: SettingItem, knowledge: SettingKnowledge, onClick: () -> Unit) {
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -218,9 +234,22 @@ fun SettingCard(item: SettingItem, onClick: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = item.key,
+                text = knowledge.displayName,
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = knowledge.description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                maxLines = 2
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = item.key,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.48f),
+                maxLines = 1
             )
             Spacer(modifier = Modifier.height(4.dp))
             Row(
@@ -231,11 +260,13 @@ fun SettingCard(item: SettingItem, onClick: () -> Unit) {
                 Text(
                     text = if (item.value.isEmpty()) "[Empty]" else item.value,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
                     maxLines = 1,
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
+                SettingsBadge(text = knowledge.confidenceLabel)
+                Spacer(modifier = Modifier.width(6.dp))
                 SettingsBadge(text = item.namespace)
             }
         }
@@ -267,6 +298,8 @@ fun SettingActionSheetContent(
     setting: SettingItem,
     shellService: ShellService,
     dbHelper: LockDatabaseHelper,
+    knowledgeStore: SettingKnowledgeStore,
+    onKnowledgeChanged: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -274,6 +307,15 @@ fun SettingActionSheetContent(
     var editValue by remember(setting.key, setting.namespace) { mutableStateOf(setting.value) }
     var isLockEnabled by remember { mutableStateOf(false) }
     var isApplying by remember { mutableStateOf(false) }
+    var knowledge by remember(setting.key, setting.namespace) {
+        mutableStateOf(knowledgeStore.get(setting.namespace, setting.key))
+    }
+    var showTeachDialog by remember { mutableStateOf(false) }
+
+    fun reloadKnowledge() {
+        knowledge = knowledgeStore.get(setting.namespace, setting.key)
+        onKnowledgeChanged()
+    }
 
     LaunchedEffect(setting.key, setting.namespace) {
         val existingLock = withContext(Dispatchers.IO) {
@@ -290,15 +332,53 @@ fun SettingActionSheetContent(
             .fillMaxWidth()
             .padding(24.dp)
             .navigationBarsPadding(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(setting.key, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(knowledge.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            knowledge.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+        )
+        Text(
+            setting.key,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+        )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SuggestionChip(onClick = {}, label = { Text(setting.namespace) })
+            SuggestionChip(onClick = {}, label = { Text(knowledge.confidenceLabel) })
             if (isLockEnabled) {
                 SuggestionChip(onClick = {}, label = { Text("Locked / enforced") })
             }
+        }
+
+        if (knowledge.acceptedValues.isNotEmpty()) {
+            Text("Values accepted on this device", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text(
+                knowledge.acceptedValues.take(12).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        if (knowledge.rejectedValues.isNotEmpty()) {
+            Text("Rejected values", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text(
+                knowledge.rejectedValues.take(12).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        knowledge.correlations.take(3).forEach { correlation ->
+            Text(
+                "Observed alongside: ${correlation.namespace}.${correlation.key} ${correlation.before} → ${correlation.after} (${correlation.observations}×)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.66f)
+            )
+        }
+        knowledge.lastResult.takeIf { it.isNotBlank() }?.let {
+            Text("Last experiment: $it", style = MaterialTheme.typography.labelSmall)
         }
 
         OutlinedTextField(
@@ -317,13 +397,50 @@ fun SettingActionSheetContent(
                 onClick = {
                     isApplying = true
                     coroutineScope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            shellService.writeSetting(setting.namespace, setting.key, editValue)
+                        val experiment = withContext(Dispatchers.IO) {
+                            val observer = SettingObservationEngine(shellService)
+                            val oldValue = shellService.readSetting(setting.namespace, setting.key)
+                            val before = observer.snapshot()
+                            val result = shellService.writeSetting(setting.namespace, setting.key, editValue)
+                            if (!result.isSuccess) {
+                                knowledgeStore.recordRejected(
+                                    setting.namespace,
+                                    setting.key,
+                                    editValue,
+                                    result.stderr.ifBlank { result.stdout.ifBlank { "write failed" } }
+                                )
+                                return@withContext Triple(result, oldValue, emptyList())
+                            }
+                            // Give SettingsProvider listeners/OEM services a short chance to react.
+                            Thread.sleep(400L)
+                            val readBack = shellService.readSetting(setting.namespace, setting.key)
+                            val after = observer.snapshot()
+                            val correlations = observer.diff(
+                                before,
+                                after,
+                                setting.namespace,
+                                setting.key
+                            )
+                            knowledgeStore.recordAccepted(
+                                namespace = setting.namespace,
+                                key = setting.key,
+                                oldValue = oldValue,
+                                requestedValue = editValue,
+                                readBackValue = readBack,
+                                correlations = correlations
+                            )
+                            Triple(result, readBack, correlations)
                         }
                         isApplying = false
+                        reloadKnowledge()
+                        val result = experiment.first
                         if (result.isSuccess) {
-                            Toast.makeText(context, "Setting written and verified.", Toast.LENGTH_SHORT).show()
-                            onDismiss()
+                            val effects = experiment.third.size
+                            Toast.makeText(
+                                context,
+                                "Setting written and verified. Learned ${if (effects == 0) "no immediate correlated setting changes" else "$effects correlated change${if (effects == 1) "" else "s"}"}.",
+                                Toast.LENGTH_LONG
+                            ).show()
                         } else {
                             Toast.makeText(context, "Failed: ${result.stderr}", Toast.LENGTH_LONG).show()
                         }
@@ -335,7 +452,7 @@ fun SettingActionSheetContent(
                 if (isApplying) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("Apply")
+                    Text("Apply + Learn")
                 }
             }
 
@@ -371,6 +488,55 @@ fun SettingActionSheetContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        OutlinedButton(
+            onClick = { showTeachDialog = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.EditNote, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Teach PowerHub what this setting does")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+
+    if (showTeachDialog) {
+        var label by remember(showTeachDialog) { mutableStateOf(knowledge.displayName) }
+        var description by remember(showTeachDialog) { mutableStateOf(knowledge.description) }
+        AlertDialog(
+            onDismissRequest = { showTeachDialog = false },
+            title = { Text("Teach setting terminology") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = label,
+                        onValueChange = { label = it },
+                        label = { Text("Human-readable name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("What it does") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 6
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        knowledgeStore.setCustomMetadata(setting.namespace, setting.key, label, description)
+                        showTeachDialog = false
+                        reloadKnowledge()
+                    }
+                ) { Text("Save learning") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTeachDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
