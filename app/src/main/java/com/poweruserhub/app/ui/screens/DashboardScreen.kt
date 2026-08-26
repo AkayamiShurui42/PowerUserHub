@@ -16,10 +16,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.poweruserhub.app.service.Pixel17SystemUiController
 import com.poweruserhub.app.service.ShellService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 
@@ -37,6 +38,9 @@ fun DashboardScreen(
     var activeBackend by remember { mutableStateOf("Detecting…") }
     var probeText by remember { mutableStateOf("") }
     var plusDetected by remember { mutableStateOf(false) }
+    var pixelTestRunning by remember { mutableStateOf(false) }
+    var pixelTestResult by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -175,6 +179,45 @@ fun DashboardScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
+            }
+        }
+
+        Text("Pixel 17 SystemUI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Proof-of-concept: inject a 2dp Quick Settings tile radius through Shizuku+ Overlay Manager Plus. If it works, the OxygenOS QS tiles should become visibly more square.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Button(
+                    enabled = shizukuActive && plusDetected && !pixelTestRunning,
+                    onClick = {
+                        pixelTestRunning = true
+                        pixelTestResult = "Running SystemUI overlay test…"
+                        scope.launch {
+                            val result = Pixel17SystemUiController.applyRadiusProofOfConcept()
+                            pixelTestResult = result.message
+                            pixelTestRunning = false
+                        }
+                    }
+                ) {
+                    if (pixelTestRunning) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Test Pixel 17 overlay")
+                }
+                if (pixelTestResult.isNotBlank()) {
+                    Text(
+                        pixelTestResult,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
             }
         }
 
