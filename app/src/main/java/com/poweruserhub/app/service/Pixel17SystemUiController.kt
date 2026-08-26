@@ -19,6 +19,13 @@ object Pixel17SystemUiController {
     private const val TARGET = "com.android.systemui"
     private const val RESOURCE = "com.android.systemui:dimen/qs_tile_corner_radius_default"
 
+    /**
+     * Packs an integer dp value into Android's complex-dimension representation.
+     * For whole-number dp values we can use radix 23.0 directly:
+     * mantissa in bits 8..31, radix 0 in bits 4..5, unit DIP in bits 0..3.
+     */
+    private fun packWholeDp(dp: Int): Int = (dp shl 8) or TypedValue.COMPLEX_UNIT_DIP
+
     suspend fun applyRadiusProofOfConcept(): Result = withContext(Dispatchers.IO) {
         if (!ShizukuPlusAPI.isEnhancedApiSupported()) {
             return@withContext Result(
@@ -34,7 +41,7 @@ object Pixel17SystemUiController {
 
         // Shizuku+'s injector accepts the integer payload used by FabricatedOverlay's
         // setResourceValue(name, type, int) overload, not a literal string like "2dp".
-        val packed2dp = TypedValue.createComplexDimension(2f, TypedValue.COMPLEX_UNIT_DIP)
+        val packed2dp = packWholeDp(2)
         val injected = ShizukuPlusAPI.OverlayManager.injectResourceOverlay(
             TARGET,
             RESOURCE,
