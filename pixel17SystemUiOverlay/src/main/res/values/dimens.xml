@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deliberately obvious proof-of-concept values. Once the overlay is
+         confirmed to win against OxygenOS, replace these with measured
+         Android 17 Pixel dimensions. -->
+    <dimen name="qs_tile_corner_radius_default">4dp</dimen>
+    <dimen name="qs_quick_cornerradius">8dp</dimen>
+    <dimen name="qs_hl_tile_corner_radius_circle_oneplus">12dp</dimen>
+</resources>
