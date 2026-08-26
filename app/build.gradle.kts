@@ -45,6 +45,14 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
-    implementation(libs.shizuku.provider)
+
+    // Built from upstream thejaustin/ShizukuPlus-API by GitHub Actions.
+    // The Plus provider remains backward compatible with stock Shizuku while exposing
+    // the enhanced Overlay/Window Manager bridges when a Shizuku+ server is connected.
+    implementation(files("libs/shizuku-plus-aidl.aar"))
+    implementation(files("libs/shizuku-plus-shared.aar"))
+    implementation(files("libs/shizuku-plus-api.aar"))
+    implementation(files("libs/shizuku-plus-provider.aar"))
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
