@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Power User Hub"
 include(":app")
+include(":pixel17SystemUiOverlay")
