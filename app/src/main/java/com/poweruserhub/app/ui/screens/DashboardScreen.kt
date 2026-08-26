@@ -23,6 +23,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuPlusAPI
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +53,11 @@ fun DashboardScreen(
                 } catch (_: Throwable) {
                     false
                 }
-                val plus = shellService.isShizukuPlusInstalled()
+                val plus = try {
+                    binder && authorized && ShizukuPlusAPI.isEnhancedApiSupported()
+                } catch (_: Throwable) {
+                    false
+                }
                 val backend = shellService.getActiveBackendName()
                 val root = shellService.getActiveExecutor()?.getName() == "Root (su)"
                 val probe = if (authorized) shellService.getPrivilegeProbe() else null
@@ -126,6 +131,7 @@ fun DashboardScreen(
             StatusCard(
                 title = if (plusDetected) "Shizuku+" else "Shizuku",
                 status = when {
+                    plusDetected -> "Enhanced API"
                     shizukuActive -> "Authorized"
                     shizukuPresent -> "Permission needed"
                     else -> "Not connected"
@@ -175,7 +181,7 @@ fun DashboardScreen(
                     )
                 }
                 Text(
-                    "The actual server UID determines what Android will allow. Shizuku+ can provide additional bridges, but Power User Hub verifies the identity and command availability instead of assuming privileges from the app name.",
+                    "The connected Shizuku provider is queried directly. When Shizuku+ exposes its enhanced API, Power User Hub automatically enables the additional Overlay Manager and Window Manager bridges while retaining standard Shizuku compatibility.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
