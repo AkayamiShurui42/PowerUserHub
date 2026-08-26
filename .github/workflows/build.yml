@@ -49,6 +49,18 @@ jobs:
           yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
           ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Trim upstream project to API modules
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('vendor/ShizukuPlus-API/settings.gradle')
+          s = p.read_text()
+          s = s.replace('include ":demo", ":demo-hidden-api-stub"\n', '')
+          s = s.replace('include ":server-shared"\n', '')
+          p.write_text(s)
+          print(p.read_text())
+          PY
+
       - name: Build Shizuku+ API from source
         run: |
           chmod +x vendor/ShizukuPlus-API/gradlew
