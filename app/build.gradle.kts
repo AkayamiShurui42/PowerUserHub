@@ -13,17 +13,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
@@ -50,9 +46,13 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Shizuku / Shizuku+ compatible binder backend
-    implementation(libs.shizuku.api)
-    implementation(libs.shizuku.provider)
+    // Built from upstream thejaustin/ShizukuPlus-API by GitHub Actions.
+    // The Plus provider remains backward compatible with stock Shizuku while exposing
+    // the enhanced Overlay/Window Manager bridges when a Shizuku+ server is connected.
+    implementation(files("libs/shizuku-plus-aidl.aar"))
+    implementation(files("libs/shizuku-plus-shared.aar"))
+    implementation(files("libs/shizuku-plus-api.aar"))
+    implementation(files("libs/shizuku-plus-provider.aar"))
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

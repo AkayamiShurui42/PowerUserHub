@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:hasCode="false"
+        android:label="Pixel 17 SystemUI Overlay"
+        android:supportsRtl="true" />
+
+    <overlay
+        android:targetPackage="com.android.systemui"
+        android:isStatic="false"
+        android:priority="999" />
+
+</manifest>

@@ -16,12 +16,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.poweruserhub.app.service.Pixel17SystemUiController
 import com.poweruserhub.app.service.ShellService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuPlusAPI
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +39,9 @@ fun DashboardScreen(
     var activeBackend by remember { mutableStateOf("Detecting…") }
     var probeText by remember { mutableStateOf("") }
     var plusDetected by remember { mutableStateOf(false) }
+    var pixelTestRunning by remember { mutableStateOf(false) }
+    var pixelTestResult by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -48,7 +53,11 @@ fun DashboardScreen(
                 } catch (_: Throwable) {
                     false
                 }
-                val plus = shellService.isShizukuPlusInstalled()
+                val plus = try {
+                    binder && authorized && ShizukuPlusAPI.isEnhancedApiSupported()
+                } catch (_: Throwable) {
+                    false
+                }
                 val backend = shellService.getActiveBackendName()
                 val root = shellService.getActiveExecutor()?.getName() == "Root (su)"
                 val probe = if (authorized) shellService.getPrivilegeProbe() else null
@@ -122,6 +131,7 @@ fun DashboardScreen(
             StatusCard(
                 title = if (plusDetected) "Shizuku+" else "Shizuku",
                 status = when {
+                    plusDetected -> "Enhanced API"
                     shizukuActive -> "Authorized"
                     shizukuPresent -> "Permission needed"
                     else -> "Not connected"
@@ -171,10 +181,49 @@ fun DashboardScreen(
                     )
                 }
                 Text(
-                    "The actual server UID determines what Android will allow. Shizuku+ can provide additional bridges, but Power User Hub verifies the identity and command availability instead of assuming privileges from the app name.",
+                    "The connected Shizuku provider is queried directly. When Shizuku+ exposes its enhanced API, Power User Hub automatically enables the additional Overlay Manager and Window Manager bridges while retaining standard Shizuku compatibility.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
+            }
+        }
+
+        Text("Pixel 17 SystemUI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Proof-of-concept: inject a 2dp Quick Settings tile radius through Shizuku+ Overlay Manager Plus. If it works, the OxygenOS QS tiles should become visibly more square.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Button(
+                    enabled = shizukuActive && plusDetected && !pixelTestRunning,
+                    onClick = {
+                        pixelTestRunning = true
+                        pixelTestResult = "Running SystemUI overlay test…"
+                        scope.launch {
+                            val result = Pixel17SystemUiController.applyRadiusProofOfConcept()
+                            pixelTestResult = result.message
+                            pixelTestRunning = false
+                        }
+                    }
+                ) {
+                    if (pixelTestRunning) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Test Pixel 17 overlay")
+                }
+                if (pixelTestResult.isNotBlank()) {
+                    Text(
+                        pixelTestResult,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
             }
         }
 

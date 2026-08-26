@@ -17,10 +17,13 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Shizuku repo or standard mavenCentral
         maven { url = java.net.URI("https://s01.oss.sonatype.org/content/repositories/releases/") }
+        flatDir {
+            dirs("app/libs")
+        }
     }
 }
 
 rootProject.name = "Power User Hub"
 include(":app")
+include(":pixel17SystemUiOverlay")

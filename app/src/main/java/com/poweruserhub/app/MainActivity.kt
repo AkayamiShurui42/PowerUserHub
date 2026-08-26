@@ -30,43 +30,35 @@ import com.poweruserhub.app.worker.LockEnforcementWorker
 import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         val shellService = ShellService(applicationContext)
         val dbHelper = LockDatabaseHelper(applicationContext)
-
         scheduleEnforcementWork()
-
         setContent {
             PowerUserHubTheme(darkTheme = true, dynamicColor = false) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    MainScreen(shellService, dbHelper)
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    MainScreen(shellService, dbHelper, intent.getBooleanExtra("open_pixel_shade", false))
                 }
             }
         }
     }
 
     private fun scheduleEnforcementWork() {
-        val workRequest = PeriodicWorkRequestBuilder<LockEnforcementWorker>(15, TimeUnit.MINUTES)
-            .build()
-        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
-            "SettingLockEnforcement",
-            ExistingPeriodicWorkPolicy.KEEP,
-            workRequest
-        )
+        val workRequest = PeriodicWorkRequestBuilder<LockEnforcementWorker>(15, TimeUnit.MINUTES).build()
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork("SettingLockEnforcement", ExistingPeriodicWorkPolicy.KEEP, workRequest)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(shellService: ShellService, dbHelper: LockDatabaseHelper) {
+fun MainScreen(shellService: ShellService, dbHelper: LockDatabaseHelper, openPixelShade: Boolean = false) {
     val navController = rememberNavController()
-    var currentTitle by remember { mutableStateOf("Overview") }
+    var currentTitle by remember { mutableStateOf(if (openPixelShade) Screen.PixelShade.title else "Overview") }
+
+    LaunchedEffect(openPixelShade) {
+        if (openPixelShade) navController.navigate(Screen.PixelShade.route) { launchSingleTop = true }
+    }
 
     val navigationItems = listOf(
         Triple(Screen.Dashboard, Icons.Default.Home, "Overview"),
@@ -74,44 +66,31 @@ fun MainScreen(shellService: ShellService, dbHelper: LockDatabaseHelper) {
         Triple(Screen.Apps, Icons.Default.Apps, "Apps"),
         Triple(Screen.Locks, Icons.Default.Lock, "Locks"),
         Triple(Screen.Services, Icons.Default.AccountTree, "Components"),
+        Triple(Screen.PixelShade, Icons.Default.Notifications, "Pixel Shade"),
         Triple(Screen.Developer, Icons.Default.Build, "Dev Mode")
     )
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        text = currentTitle,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
+                title = { Text(currentTitle, fontWeight = FontWeight.Bold, color = Color.White) },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
-            ) {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 8.dp) {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
-
                 navigationItems.forEach { (screen, icon, label) ->
                     NavigationBarItem(
                         icon = { Icon(icon, contentDescription = label) },
-                        label = { Text(label, fontSize = 10.sp) },
+                        label = { Text(label, fontSize = 9.sp) },
                         selected = currentRoute == screen.route,
                         onClick = {
                             if (currentRoute != screen.route) {
                                 currentTitle = screen.title
                                 navController.navigate(screen.route) {
-                                    popUpTo(Screen.Dashboard.route) {
-                                        saveState = true
-                                    }
+                                    popUpTo(Screen.Dashboard.route) { saveState = true }
                                     launchSingleTop = true
                                     restoreState = true
                                 }
@@ -122,43 +101,19 @@ fun MainScreen(shellService: ShellService, dbHelper: LockDatabaseHelper) {
             }
         }
     ) { paddingValues ->
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Dashboard.route,
-            modifier = Modifier.padding(paddingValues)
-        ) {
+        NavHost(navController, Screen.Dashboard.route, Modifier.padding(paddingValues)) {
             composable(Screen.Dashboard.route) {
-                DashboardScreen(
-                    shellService = shellService,
-                    onNavigateToSettings = {
-                        currentTitle = Screen.Settings.title
-                        navController.navigate(Screen.Settings.route)
-                    },
-                    onNavigateToApps = {
-                        currentTitle = Screen.Apps.title
-                        navController.navigate(Screen.Apps.route)
-                    },
-                    onNavigateToLocks = {
-                        currentTitle = Screen.Locks.title
-                        navController.navigate(Screen.Locks.route)
-                    }
-                )
+                DashboardScreen(shellService,
+                    onNavigateToSettings = { currentTitle = Screen.Settings.title; navController.navigate(Screen.Settings.route) },
+                    onNavigateToApps = { currentTitle = Screen.Apps.title; navController.navigate(Screen.Apps.route) },
+                    onNavigateToLocks = { currentTitle = Screen.Locks.title; navController.navigate(Screen.Locks.route) })
             }
-            composable(Screen.Settings.route) {
-                SettingsExplorerScreen(shellService, dbHelper)
-            }
-            composable(Screen.Apps.route) {
-                AppExplorerScreen(shellService)
-            }
-            composable(Screen.Locks.route) {
-                LockedSettingsScreen(dbHelper, shellService)
-            }
-            composable(Screen.Services.route) {
-                ServiceMonitorScreen(shellService)
-            }
-            composable(Screen.Developer.route) {
-                AdvancedDeveloperModeScreen(shellService)
-            }
+            composable(Screen.Settings.route) { SettingsExplorerScreen(shellService, dbHelper) }
+            composable(Screen.Apps.route) { AppExplorerScreen(shellService) }
+            composable(Screen.Locks.route) { LockedSettingsScreen(dbHelper, shellService) }
+            composable(Screen.Services.route) { ServiceMonitorScreen(shellService) }
+            composable(Screen.PixelShade.route) { PixelShadeScreen() }
+            composable(Screen.Developer.route) { AdvancedDeveloperModeScreen(shellService) }
         }
     }
 }

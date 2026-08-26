@@ -6,5 +6,6 @@ sealed class Screen(val route: String, val title: String) {
     object Apps : Screen("apps", "App Explorer")
     object Locks : Screen("locks", "Locked Settings")
     object Services : Screen("services", "Component Explorer")
+    object PixelShade : Screen("pixel_shade", "Pixel 17 Shade")
     object Developer : Screen("developer", "Developer Mode")
 }
