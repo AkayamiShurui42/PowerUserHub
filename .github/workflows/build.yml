@@ -18,7 +18,7 @@ jobs:
   build:
     name: Verify PowerUserHub Pixel 17 branch
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
 
     steps:
       - name: Checkout PowerUserHub
@@ -30,52 +30,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Validate PowerUserHub Gradle wrapper
+      - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Checkout upstream Shizuku+ API
-        uses: actions/checkout@v7
-        with:
-          repository: thejaustin/ShizukuPlus-API
-          ref: master
-          path: vendor/ShizukuPlus-API
-          persist-credentials: false
-
-      - name: Install Android 36 SDK for upstream API
-        run: |
-          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
-          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Trim upstream project to API modules
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('vendor/ShizukuPlus-API/settings.gradle')
-          s = p.read_text()
-          s = s.replace('include ":demo", ":demo-hidden-api-stub"\n', '')
-          s = s.replace('include ":server-shared"\n', '')
-          p.write_text(s)
-          print(p.read_text())
-          PY
-
-      - name: Build Shizuku+ API from source
-        run: |
-          chmod +x vendor/ShizukuPlus-API/gradlew
-          cd vendor/ShizukuPlus-API
-          ./gradlew --no-daemon :aidl:assembleRelease :shared:assembleRelease :api:assembleRelease --stacktrace
-
-      - name: Stage Shizuku+ API AARs
-        run: |
-          mkdir -p app/libs
-          cp vendor/ShizukuPlus-API/aidl/build/outputs/aar/aidl-release.aar app/libs/shizuku-plus-aidl-release.aar
-          cp vendor/ShizukuPlus-API/shared/build/outputs/aar/shared-release.aar app/libs/shizuku-plus-shared-release.aar
-          cp vendor/ShizukuPlus-API/api/build/outputs/aar/api-release.aar app/libs/shizuku-plus-api-release.aar
-          ls -lh app/libs
-
-      - name: Build PowerUserHub
+      - name: Build PowerUserHub Pixel Shade test
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
