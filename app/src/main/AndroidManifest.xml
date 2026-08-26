@@ -2,15 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Required by the package/component explorer to enumerate installed apps on a
-         power-user sideloaded build. Narrow <queries> declarations would prevent the
-         app from fulfilling its core package-inspection feature. -->
-    <uses-permission
-        android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -19,7 +17,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.PowerUserHub">
-        
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -31,6 +29,12 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".service.PixelShadeTriggerService"
+            android:enabled="true"
+            android:exported="false"
+            android:stopWithTask="false" />
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
@@ -40,5 +44,4 @@
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
-
 </manifest>
