@@ -50,9 +50,11 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Shizuku / Shizuku+ compatible binder backend
-    implementation(libs.shizuku.api)
+    // Standard Shizuku provider remains for permission/provider integration.
     implementation(libs.shizuku.provider)
+
+    // Real upstream Shizuku+ client API, including Overlay Manager Plus.
+    implementation("com.github.thejaustin:Shizuku+-API:13.2.0-plus")
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
