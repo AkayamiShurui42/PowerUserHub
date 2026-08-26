@@ -13,17 +13,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
@@ -49,17 +45,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
-
-    // Keep the normal Shizuku provider, but use upstream Shizuku+ API AARs
-    // built from source by GitHub Actions instead of relying on JitPack.
-    implementation(libs.shizuku.provider) {
-        exclude(group = "dev.rikka.shizuku", module = "api")
-        exclude(group = "dev.rikka.shizuku", module = "shared")
-        exclude(group = "dev.rikka.shizuku", module = "aidl")
-    }
-    implementation(files("libs/shizuku-plus-aidl-release.aar"))
-    implementation(files("libs/shizuku-plus-shared-release.aar"))
-    implementation(files("libs/shizuku-plus-api-release.aar"))
-
+    implementation(libs.shizuku.provider)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
