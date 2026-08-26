@@ -50,11 +50,16 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Standard Shizuku provider remains for permission/provider integration.
-    implementation(libs.shizuku.provider)
-
-    // Real upstream Shizuku+ client API, including Overlay Manager Plus.
-    implementation("com.github.thejaustin:Shizuku+-API:13.2.0-plus")
+    // Keep the normal Shizuku provider, but use upstream Shizuku+ API AARs
+    // built from source by GitHub Actions instead of relying on JitPack.
+    implementation(libs.shizuku.provider) {
+        exclude(group = "dev.rikka.shizuku", module = "api")
+        exclude(group = "dev.rikka.shizuku", module = "shared")
+        exclude(group = "dev.rikka.shizuku", module = "aidl")
+    }
+    implementation(files("libs/shizuku-plus-aidl-release.aar"))
+    implementation(files("libs/shizuku-plus-shared-release.aar"))
+    implementation(files("libs/shizuku-plus-api-release.aar"))
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
