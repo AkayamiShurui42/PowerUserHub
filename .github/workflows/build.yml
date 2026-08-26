@@ -2,7 +2,7 @@ name: Android CI Build
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "pixel17-systemui-overlay" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Verify and build debug APK
+    name: Verify app and build Pixel 17 overlay
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -39,8 +39,8 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run checks and build debug APK
-        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug --stacktrace
+      - name: Run app checks and build APKs
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :pixel17SystemUiOverlay:assembleDebug --stacktrace
 
       - name: Upload lint report
         if: always()
@@ -51,11 +51,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload Debug APK Artifact
+      - name: Upload PowerUserHub debug APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
           name: PowerUserHub-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Pixel 17 SystemUI overlay APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: Pixel17-SystemUI-Overlay-debug-apk
+          path: pixel17SystemUiOverlay/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
