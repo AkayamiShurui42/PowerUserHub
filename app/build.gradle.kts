@@ -1,58 +1,53 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
-    namespace = "com.poweruserhub.app"
-    compileSdk = 35
+    namespace = "com.crimson.pixelshade"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.poweruserhub.app"
-        minSdk = 26
-        targetSdk = 35
+        applicationId = "com.crimson.pixelshade"
+        minSdk = 31
+        targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionName = "0.1.0"
     }
 
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
     buildFeatures {
         compose = true
         aidl = true
     }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
+    implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
-    implementation(libs.androidx.work.runtime.ktx)
 
-    // Built from upstream thejaustin/ShizukuPlus-API by GitHub Actions.
-    // The Plus provider remains backward compatible with stock Shizuku while exposing
-    // the enhanced Overlay/Window Manager bridges when a Shizuku+ server is connected.
-    implementation(files("libs/shizuku-plus-aidl.aar"))
-    implementation(files("libs/shizuku-plus-shared.aar"))
-    implementation(files("libs/shizuku-plus-api.aar"))
-    implementation(files("libs/shizuku-plus-provider.aar"))
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
+    // Built/staged by GitHub Actions from upstream ShizukuPlus-API.
+    implementation(fileTree("libs") { include("*.aar") })
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
