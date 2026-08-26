@@ -1,6 +1,7 @@
 package com.poweruserhub.app.ui.screens
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -18,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.poweruserhub.app.model.*
+import com.poweruserhub.app.service.PixelShadeAccessibilityService
 import com.poweruserhub.app.service.PixelShadePreferences
 import com.poweruserhub.app.service.PixelShadeTriggerService
 import rikka.shizuku.Shizuku
@@ -46,6 +48,7 @@ fun PixelShadeScreen() {
 
     @Suppress("UNUSED_EXPRESSION")
     permissionRefresh
+
     val notificationsGranted = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     val overlayGranted = Settings.canDrawOverlays(context)
@@ -54,6 +57,20 @@ fun PixelShadeScreen() {
     }.getOrDefault(false)
     val powerManager = context.getSystemService(PowerManager::class.java)
     val batteryExempt = powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+
+    val enabledListeners = Settings.Secure.getString(
+        context.contentResolver,
+        "enabled_notification_listeners"
+    ).orEmpty()
+    val notificationAccessGranted = enabledListeners.contains(context.packageName)
+
+    val accessibilityComponent = ComponentName(context, PixelShadeAccessibilityService::class.java).flattenToString()
+    val enabledAccessibility = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ).orEmpty()
+    val accessibilityGranted = PixelShadeAccessibilityService.connected ||
+        enabledAccessibility.split(':').any { it.equals(accessibilityComponent, ignoreCase = true) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -75,6 +92,14 @@ fun PixelShadeScreen() {
                         if (Build.VERSION.SDK_INT >= 33) {
                             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
+                    }
+
+                    PermissionRow("Notification access", notificationAccessGranted) {
+                        context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    }
+
+                    PermissionRow("Accessibility service", accessibilityGranted) {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     }
 
                     PermissionRow("Display over other apps", overlayGranted) {
