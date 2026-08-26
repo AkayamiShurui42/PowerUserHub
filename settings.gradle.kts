@@ -18,7 +18,9 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = java.net.URI("https://s01.oss.sonatype.org/content/repositories/releases/") }
-        maven { url = java.net.URI("https://jitpack.io") }
+        flatDir {
+            dirs("app/libs")
+        }
     }
 }
 
