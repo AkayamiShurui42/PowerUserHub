@@ -16,12 +16,12 @@ concurrency:
 
 jobs:
   build:
-    name: Verify app and build Pixel 17 overlay
+    name: Verify PowerUserHub Pixel 17 branch
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      - name: Checkout project
+      - name: Checkout PowerUserHub
         uses: actions/checkout@v7
 
       - name: Set up JDK 17
@@ -30,17 +30,43 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Validate Gradle wrapper
+      - name: Validate PowerUserHub Gradle wrapper
         uses: gradle/actions/wrapper-validation@v6
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Checkout upstream Shizuku+ API
+        uses: actions/checkout@v7
+        with:
+          repository: thejaustin/ShizukuPlus-API
+          ref: master
+          path: vendor/ShizukuPlus-API
+          persist-credentials: false
 
-      - name: Run app checks and build APKs
-        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :pixel17SystemUiOverlay:assembleDebug --stacktrace
+      - name: Install Android 36 SDK for upstream API
+        run: |
+          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null || true
+          ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build Shizuku+ API from source
+        run: |
+          chmod +x vendor/ShizukuPlus-API/gradlew
+          cd vendor/ShizukuPlus-API
+          ./gradlew --no-daemon :aidl:assembleRelease :shared:assembleRelease :api:assembleRelease --stacktrace
+
+      - name: Stage Shizuku+ API AARs
+        run: |
+          mkdir -p app/libs
+          cp vendor/ShizukuPlus-API/aidl/build/outputs/aar/aidl-release.aar app/libs/shizuku-plus-aidl-release.aar
+          cp vendor/ShizukuPlus-API/shared/build/outputs/aar/shared-release.aar app/libs/shizuku-plus-shared-release.aar
+          cp vendor/ShizukuPlus-API/api/build/outputs/aar/api-release.aar app/libs/shizuku-plus-api-release.aar
+          ls -lh app/libs
+
+      - name: Build PowerUserHub
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Upload lint report
         if: always()
@@ -51,20 +77,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload PowerUserHub debug APK
+      - name: Upload PowerUserHub Pixel 17 debug APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
-          name: PowerUserHub-debug-apk
+          name: PowerUserHub-Pixel17-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload Pixel 17 SystemUI overlay APK
-        if: success()
-        uses: actions/upload-artifact@v7
-        with:
-          name: Pixel17-SystemUI-Overlay-debug-apk
-          path: pixel17SystemUiOverlay/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
